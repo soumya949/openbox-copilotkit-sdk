@@ -43,7 +43,10 @@ export type {
 
 const DEFAULT_MAX_CONCURRENT_SENDS = 8;
 const DEFAULT_MAX_PENDING_EVENTS = 1000;
-const DEFAULT_FLUSH_TIMEOUT_MS = 5000;
+// A run's events send one after another, about a second each against Core
+// v3 (workload token + evaluate), so a short budget dropped the run's closing
+// WorkflowCompleted when a process shut down right after a run.
+const DEFAULT_FLUSH_TIMEOUT_MS = 30_000;
 
 function delay(ms: number): Promise<void> {
   return new Promise(resolve => {

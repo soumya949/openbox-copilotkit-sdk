@@ -33,7 +33,7 @@ export interface TelemetryQueueOptions {
   maxConcurrentSends?: number;
   /** Max events accepted-but-not-yet-settled across ALL runs. Default 1000. */
   maxPendingEvents?: number;
-  /** Overall bound on `flush()`'s wait for in-flight/queued sends, ms. Default 5000. */
+  /** Overall bound on `flush()`'s wait for in-flight/queued sends, ms. Default 30000. */
   flushTimeoutMs?: number;
   /** Only `"drop-newest"` is implemented — largest-backlog eviction was cut (RT-F8, YAGNI). */
   overflowPolicy?: TelemetryOverflowPolicy;

@@ -4,6 +4,7 @@ import type { OpenBoxRuntime } from "@openbox-ai/openbox-sdk-ts/runtime";
 import type { OpenBoxConfigInput } from "../config/openbox-config.js";
 
 import { buildBaseRuntime } from "./internal/base-runtime-builder.js";
+import type { TelemetryQueueOptions } from "./lifecycle-telemetry.js";
 import { InMemoryInterruptStore } from "./internal/interrupt-store.js";
 import { RunTerminalStateRegistry } from "./internal/run-terminal-state.js";
 import { ServerToolOwnershipRegistry } from "./internal/server-tool-ownership.js";
@@ -28,6 +29,8 @@ export interface CreateOpenBoxCopilotKitOptions extends OpenBoxConfigInput {
    */
   enforcement?: OpenBoxEnforcementOptions;
   logger?: OpenBoxLogger;
+  /** Bounded telemetry-queue options (e.g. `flushTimeoutMs`), as `middlewareOptions.telemetry` on `withOpenBoxRuntime`. */
+  telemetry?: TelemetryQueueOptions;
   /** See `WithOpenBoxRuntimeConfig.validateApiKeyAtStartup`. Default `false`. */
   validateApiKeyAtStartup?: boolean;
 }
@@ -79,13 +82,14 @@ export interface OpenBoxCopilotKitBundle {
 export async function createOpenBoxCopilotKit(
   opts: CreateOpenBoxCopilotKitOptions = {}
 ): Promise<OpenBoxCopilotKitBundle> {
-  const { approvalMaxWaitMs, enforcement, logger, validateApiKeyAtStartup, ...configInput } = opts;
+  const { approvalMaxWaitMs, enforcement, logger, telemetry, validateApiKeyAtStartup, ...configInput } = opts;
 
   const resolvedApprovalMaxWaitMs =
     approvalMaxWaitMs !== undefined ? approvalMaxWaitMs : enforcement?.approvalMaxWaitMs;
 
   const built = buildBaseRuntime(configInput, {
     ...(logger !== undefined ? { logger } : {}),
+    ...(telemetry !== undefined ? { telemetry } : {}),
     ...(resolvedApprovalMaxWaitMs !== undefined ? { approvalMaxWaitMs: resolvedApprovalMaxWaitMs } : {})
   });
 
