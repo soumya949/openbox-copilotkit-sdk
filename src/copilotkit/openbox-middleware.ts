@@ -100,6 +100,8 @@ interface ToolCallBufferEntry {
 interface PerRunState {
   // The CopilotKit agent the run belongs to; titles the run's own rows.
   agentId: string | undefined;
+  // Set once the run's terminal WorkflowFailed was sent by a gate refusal.
+  closed: boolean;
   // Dedup keys for already-emitted handoffs:
   // `${multiAgentSessionId}::${fromAgentDid}::${childAgentName}::${parentActivityId}`.
   emittedHandoffs: Set<string>;
@@ -228,7 +230,8 @@ export class OpenBoxMiddleware extends Middleware {
         userInput: extractLastUserMessage(input.messages),
         workflowId: input.threadId,
         workflowStarted: false,
-        agentId: undefined
+        agentId: undefined,
+        closed: false
       };
 
       let blocked = false;
@@ -926,6 +929,13 @@ export class OpenBoxMiddleware extends Middleware {
       entry.activityStarted = true;
       entry.lastVerdict = enforced.verdict;
       if (enforced.blockEvent) {
+        await this.#closeRefusedRun({
+          agentId,
+          failure: enforced.failure ?? { message: "Blocked by governance", name: "GovernanceBlockedError" },
+          goal,
+          metadata,
+          state
+        });
         return enforced.blockEvent;
       }
       // A blocked delegation never hands off; the Handoff is emitted only after a
@@ -973,6 +983,7 @@ export class OpenBoxMiddleware extends Middleware {
     input: ActivityStartedInput
   ): Promise<{
     blockEvent: GovernanceBlockedErrorEvent | undefined;
+    failure?: Record<string, unknown>;
     verdict: GovernanceVerdictResponse | null;
   }> {
     const envelope = this.#emitter.prepareActivityStartedForEnforcement(input);
@@ -1001,6 +1012,7 @@ export class OpenBoxMiddleware extends Middleware {
       });
       return {
         blockEvent: createGovernanceBlockedErrorEvent(resolveEnforcementCorrelationId(err)),
+        failure: { message: controlError.message, name: controlError.name },
         verdict: null
       };
     }
@@ -1140,6 +1152,61 @@ export class OpenBoxMiddleware extends Middleware {
     }
   }
 
+  /**
+   * End a run the enforcing gate refused (block, halt, or a rejected/expired
+   * approval): the blocked AG-UI stream ends here, so Core must see the run
+   * end too. Every activity already reported as started is closed as failed
+   * (the refused one included); calls never reported are dropped — they never
+   * ran. No new evaluation is requested. Then WorkflowFailed, then the run's
+   * state is released.
+   */
+  async #closeRefusedRun({
+    agentId,
+    failure,
+    goal,
+    metadata,
+    state
+  }: {
+    agentId?: string | undefined;
+    failure: Record<string, unknown>;
+    goal?: string | undefined;
+    metadata?: Record<string, unknown> | undefined;
+    state: PerRunState;
+  }): Promise<void> {
+    if (state.closed) {
+      return;
+    }
+    state.closed = true;
+    for (const [activityId, entry] of state.toolCallBuffer) {
+      if (entry.activityStarted && !entry.completed) {
+        entry.activityArgs ??= parseToolArgs(entry.args);
+        entry.endTime ??= Date.now();
+        await this.#emitActivityCompleted({
+          activityId,
+          agentId,
+          entry,
+          error: failure,
+          goal,
+          metadata,
+          state,
+          status: "failed"
+        });
+      }
+    }
+    state.toolCallBuffer.clear();
+    await this.#emitter.emitWorkflowFailed({
+      agentId: state.agentId ?? agentId,
+      durationMs: Math.max(0, Date.now() - state.startTime),
+      error: failure,
+      goal,
+      metadata,
+      multiAgentSessionId: state.multiAgentSessionId,
+      runId: state.runId,
+      workflowId: state.workflowId
+    });
+    await this.#clearRunOnTerminal(state);
+  }
+
   async #emitWorkflowFailedFromError(
     state: PerRunState,
     err: unknown
@@ -1163,6 +1230,9 @@ export class OpenBoxMiddleware extends Middleware {
       state,
       status: "failed"
     });
+    if (state.closed) {
+      return;
+    }
     await this.#emitter.emitWorkflowFailed({
       agentId: state.agentId,
       durationMs: Math.max(0, Date.now() - state.startTime),

@@ -228,6 +228,34 @@ describe("BLOCK/HALT regression through the new evaluateLifecycle path", () => {
   });
 });
 
+describe("a gate refusal closes the run", () => {
+  it.each([
+    ["block", "policy denied"],
+    ["halt", "emergency stop"]
+  ])("%s -- the refused activity is closed as failed, then WorkflowFailed, with no WorkflowCompleted", async (verdict, reason) => {
+    const fakeCore = new FakeCore().queueEvaluate({ body: { reason, verdict } });
+    const runtime = buildConformanceRuntime(fakeCore, { adapter: new CoreAdapter() });
+    const { controller, evaluateMock } = buildController({ runtime });
+    const middleware = createOpenBoxMiddleware(controller, {
+      enforceApprovals: true,
+      frontendToolNames: [TOOL_NAME]
+    });
+
+    await collectEvents(
+      middleware.run(buildRunAgentInput(), new ScriptedAgent({ events: scriptedToolCallEvents() }))
+    );
+
+    const sent = evaluateMock.mock.calls.map(call => call[0] as Record<string, unknown>);
+    const types = sent.map(p => p.event_type);
+    expect(types.slice(-2)).toEqual(["ActivityCompleted", "WorkflowFailed"]);
+    expect(types).not.toContain("WorkflowCompleted");
+    const completed = sent.find(p => p.event_type === "ActivityCompleted");
+    expect(completed?.activity_id).toBe(TOOL_CALL_ID);
+    expect(completed?.status).toBe("failed");
+    expect(sent.filter(p => p.event_type === "WorkflowFailed")).toHaveLength(1);
+  });
+});
+
 describe("auth/API errors fail closed -- never converted to allow", () => {
   it("evaluate() rejects with 401 (GovernanceAPIError, fail-closed auth) -- governance_blocked frame, tool NOT allowed", async () => {
     const fakeCore = new FakeCore().queueEvaluate({ body: {}, status: 401 });
