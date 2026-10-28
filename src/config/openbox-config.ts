@@ -17,6 +17,22 @@ export const API_KEY_PATTERN = /^obx_(live|test)_[a-zA-Z0-9_]+$/;
 export interface OpenBoxConfigInput {
   agentDid?: string | undefined;
   agentPrivateKey?: string | undefined;
+  /**
+   * v3 Keycloak workload identity: the agent's workload private key (PKCS#8
+   * PEM). Env: `OPENBOX_COPILOTKIT_WORKLOAD_PRIVATE_KEY` / `OPENBOX_WORKLOAD_PRIVATE_KEY`.
+   */
+  workloadPrivateKey?: string | undefined;
+  /** Explicit identity method; inferred from the identity fields when unset. */
+  identityMethod?: "openbox_did" | "okta_ai_agent" | "keycloak_workload" | undefined;
+  /** v2 Okta AI Agent identity. With only the private key set, Core supplies the rest at bootstrap. */
+  oktaAgentPrivateKey?: string | undefined;
+  oktaAgentId?: string | undefined;
+  oktaAgentKeyId?: string | undefined;
+  oktaAgentAlgorithm?: string | undefined;
+  agentId?: string | undefined;
+  organizationId?: string | undefined;
+  deploymentId?: string | undefined;
+  agentProofAudience?: string | undefined;
   apiKey?: string | undefined;
   apiUrl?: string | undefined;
   evaluateMaxRetries?: number | undefined;

@@ -109,8 +109,8 @@ export class ChildAgentClientCache {
    * Idempotent shutdown: latch OFF new child construction (see
    * `beginShutdown` — redundant if the caller already called it, a no-op
    * either way), await every still-in-flight handoff emission across every
-   * run (never let the process exit mid signing-or-send), then drop every
-   * cached child client. Safe to call more than once — later calls resolve
+   * run (never let the process exit mid signing-or-send), then close and drop
+   * every cached child client. Safe to call more than once — later calls resolve
    * the first call's promise.
    */
   close(): Promise<void> {
@@ -120,6 +120,10 @@ export class ChildAgentClientCache {
         const pending = [...this.#pendingByRun.values()].flatMap(set => [...set]);
         this.#pendingByRun.clear();
         await Promise.allSettled(pending);
+        // Release each child's identity material (signing keys, workload tokens).
+        for (const client of this.#clients.values()) {
+          client.close();
+        }
         this.#clients.clear();
       })();
     }

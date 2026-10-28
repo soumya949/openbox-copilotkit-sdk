@@ -31,25 +31,19 @@ function gte(v: Semver, min: Semver): boolean {
 }
 
 /**
- * FREEZE (Phase 1 / RT-F15a/b).
- *
- * The migration depends on the base SDK carrying P0a/P0b/P0c, first shipped in
- * `1.0.1`. This asserts the *installed* base is >= 1.0.1 and < 2.0.0.
- *
- * NOTE (local-dev deviation — see _notes/decision-local-base-sdk-link-for-0.4.0-migration.md):
- * `1.0.1` is not yet on npm, so the base is currently linked `file:../openbox-sdk-ts`.
- * The "no local/`file:` specifier in the lockfile" invariant is therefore a
- * RELEASE gate (run with OPENBOX_RELEASE_CHECK=1), not a dev-cycle assertion —
- * the release swap to an exact `1.0.1` registry pin is user-owned.
+ * The SDK needs base `2.1.0`: v3 Keycloak workload identity and v2 Okta
+ * (`OpenBoxClient.fromConfig`) arrived in 2.0.0, and 2.1.0 keeps the process
+ * alive while an approval is pending. This asserts the *installed* base is
+ * >= 2.1.0 and < 3.0.0; the release gate requires the exact registry pin.
  */
 describe("base-sdk provenance", () => {
-  it("installs @openbox-ai/openbox-sdk-ts >= 1.0.1 and < 2.0.0", () => {
+  it("installs @openbox-ai/openbox-sdk-ts >= 2.1.0 and < 3.0.0", () => {
     const pkg = require(`${BASE_PKG}/package.json`) as { name: string; version: string };
     expect(pkg.name).toBe(BASE_PKG);
 
     const v = parseSemver(pkg.version);
-    expect(gte(v, { major: 1, minor: 0, patch: 1 }), `installed ${pkg.version} must be >= 1.0.1`).toBe(true);
-    expect(v.major, `installed ${pkg.version} must be < 2.0.0`).toBeLessThan(2);
+    expect(gte(v, { major: 2, minor: 1, patch: 0 }), `installed ${pkg.version} must be >= 2.1.0`).toBe(true);
+    expect(v.major, `installed ${pkg.version} must be < 3.0.0`).toBeLessThan(3);
   });
 
   it.runIf(Boolean(process.env["OPENBOX_RELEASE_CHECK"]))(
@@ -64,7 +58,7 @@ describe("base-sdk provenance", () => {
       expect(entry?.resolved ?? "", "base SDK must resolve from the npm registry at release").toMatch(
         /^https:\/\//
       );
-      expect(entry?.version, "base SDK must be pinned exactly to 1.0.1 at release").toBe("1.0.1");
+      expect(entry?.version, "base SDK must be pinned exactly to 2.1.0 at release").toBe("2.1.0");
     }
   );
 });

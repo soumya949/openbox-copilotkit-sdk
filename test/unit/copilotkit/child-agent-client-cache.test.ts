@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { ChildAgentClientCache } from "../../../src/copilotkit/internal/child-agent-client-cache.js";
 
 function fakeClient(): OpenBoxClient {
-  return { evaluate: vi.fn() } as unknown as OpenBoxClient;
+  return { close: vi.fn(), evaluate: vi.fn() } as unknown as OpenBoxClient;
 }
 
 describe("ChildAgentClientCache", () => {

@@ -70,15 +70,10 @@ export function buildBaseRuntime(
   const config = resolveCopilotKitBaseConfig(configInput, opts.instrumentation, opts.logger);
   const clientLogger = toClientLogger(opts.logger);
 
-  const client = new OpenBoxClient(config.apiUrl, config.apiKey, {
-    timeoutSeconds: config.timeoutSeconds,
-    onApiError: config.onApiError,
-    identity: config.loadIdentity(),
-    sdkVersion: config.sdkVersion,
-    sdkEngine: config.sdkEngine,
-    sdkLanguage: config.sdkLanguage,
-    ...(clientLogger ? { logger: clientLogger } : {})
-  });
+  // `fromConfig` wires whichever identity method the config resolved to —
+  // v3 Keycloak workload token, v2 Okta assertion, v1 DID signature, or
+  // API-key only — and fails closed when a selected method lacks its key.
+  const client = OpenBoxClient.fromConfig(config, clientLogger ? { logger: clientLogger } : {});
 
   // Aborts an in-flight approval wait on shutdown (base P0b) — composed with
   // the per-request poll timeout inside the base `ApprovalPoller`/`OpenBoxClient`,

@@ -34,7 +34,9 @@ export { resetConfigTranslatorDeprecationWarningsForTests } from "./config-depre
  * `instrumentation` nested groups. Base's own `OpenBoxConfig.resolve` already
  * performs the first three tiers itself for its OWN env-resolvable fields
  * (`apiUrl`, `apiKey`, `timeoutSeconds`, `onApiError`, `agentDid`,
- * `agentPrivateKey`) when this translator leaves them unset; every OTHER
+ * `agentPrivateKey`, and the v2/v3 identity fields — `workloadPrivateKey`,
+ * `identityMethod`, `okta*`, `agentId`, `organizationId`, `deploymentId`,
+ * `agentProofAudience`) when this translator leaves them unset; every OTHER
  * field (the nested groups base does NOT env-resolve, plus the adapter-only
  * telemetry-queue bounds) gets the same three-tier resolution replicated
  * here.
@@ -99,12 +101,46 @@ export function resolveCopilotKitBaseConfig(
     ...(configInput.agentPrivateKey !== undefined
       ? { agentPrivateKey: configInput.agentPrivateKey }
       : {}),
+    ...explicitIdentityFields(configInput),
     ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}),
     ...(configInput.onApiError !== undefined ? { onApiError: configInput.onApiError } : {}),
     hitl,
     gate,
     instrumentation
   });
+}
+
+/** Identity fields forwarded to the base SDK, which resolves and validates the method. */
+const IDENTITY_FIELDS = [
+  "workloadPrivateKey",
+  "identityMethod",
+  "oktaAgentPrivateKey",
+  "oktaAgentId",
+  "oktaAgentKeyId",
+  "oktaAgentAlgorithm",
+  "agentId",
+  "organizationId",
+  "deploymentId",
+  "agentProofAudience"
+] as const satisfies readonly (keyof OpenBoxConfigInput)[];
+
+/**
+ * The explicitly set v2/v3 identity fields of `configInput`. Unset fields are
+ * left out, so base `OpenBoxConfig.resolve()` falls back to
+ * `OPENBOX_COPILOTKIT_<FIELD>` / `OPENBOX_<FIELD>` for them.
+ */
+type IdentityField = (typeof IDENTITY_FIELDS)[number];
+type ExplicitIdentityFields = { [K in IdentityField]?: NonNullable<OpenBoxConfigInput[K]> };
+
+function explicitIdentityFields(configInput: OpenBoxConfigInput): ExplicitIdentityFields {
+  const fields: Record<string, unknown> = {};
+  for (const field of IDENTITY_FIELDS) {
+    const value = configInput[field];
+    if (value !== undefined) {
+      fields[field] = value;
+    }
+  }
+  return fields;
 }
 
 /**
