@@ -988,6 +988,8 @@ export class OpenBoxMiddleware extends Middleware {
   }> {
     const envelope = this.#emitter.prepareActivityStartedForEnforcement(input);
     try {
+      // The run's queued events (WorkflowStarted, the prompt) reach Core first.
+      await this.#runtime.telemetryQueue.drainRun(input.runId);
       const result = await this.#runtime.runtime.evaluateLifecycle(envelope);
       if (!isProceedableVerdict(result.verdict)) {
         throw new CopilotKitUnsupportedVerdictError(

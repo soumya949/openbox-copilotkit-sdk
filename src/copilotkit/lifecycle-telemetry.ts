@@ -144,6 +144,17 @@ export class LifecycleTelemetryQueue {
   }
 
   /** Bounded drain: wait for every currently in-flight/queued send, up to `timeoutMs` (default `flushTimeoutMs`). Reports the count not flushed. */
+  /**
+   * Resolves once every event already queued for `runId` has been sent (or
+   * failed). A caller that sends one of the run's events DIRECTLY — the
+   * enforcing gates, hook spans, handoffs — awaits this first, so Core never
+   * receives that event ahead of the run's earlier queued events (e.g. a
+   * tool's ActivityStarted before the run's WorkflowStarted).
+   */
+  drainRun(runId: string): Promise<void> {
+    return this.#runChains.get(runId) ?? Promise.resolve();
+  }
+
   async flush(timeoutMs?: number): Promise<{ notFlushed: number }> {
     const budget = timeoutMs ?? this.#flushTimeoutMs;
     const tails = [...this.#runChains.values()];

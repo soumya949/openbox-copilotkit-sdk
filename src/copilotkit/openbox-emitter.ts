@@ -414,6 +414,7 @@ export class OpenBoxCopilotKitEmitter {
     );
 
     try {
+      await this.#telemetryQueue.drainRun(input.runId);
       // Signed AS THE CHILD: `childClient` is a base `OpenBoxClient` scoped to
       // the child's own DID/key (see `openbox-middleware.ts#buildChildClient`),
       // never the controller's own parent-scoped `#client`.
@@ -467,6 +468,7 @@ export class OpenBoxCopilotKitEmitter {
     this.#notifyObserver(payload, emissionMeta);
 
     try {
+      await this.#telemetryQueue.drainRun(typeof payload.run_id === "string" ? payload.run_id : "");
       // The base client's `evaluate` takes a prepared `JsonValue` and
       // resolves a base `EvaluationResult`. This SDK still reads that result
       // through its own local `GovernanceVerdictResponse` shape — every field

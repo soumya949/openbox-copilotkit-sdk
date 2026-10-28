@@ -239,6 +239,8 @@ export function serverTool<T>(
 
         let evalResult: EvaluationResult;
         try {
+          // The run's queued events (WorkflowStarted, the prompt) reach Core first.
+          await controller.telemetryQueue.drainRun(runId);
           evalResult = await controller.runtime.evaluateLifecycle(envelope);
         } catch (err) {
           throw toGovernanceControlError(err);
