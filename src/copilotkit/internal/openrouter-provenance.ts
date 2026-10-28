@@ -40,6 +40,8 @@ export const DRAIN_TIMEOUT_MS = LOOKUP_BUDGET_MS + 5_000;
 const BACKOFF_MS = [500, 1_000, 2_000, 3_000, 4_000];
 const ATTEMPT_TIMEOUT_MS = 4_000;
 const MAX_CAPTURED_BODY_CHARS = 2_000_000;
+/** How long an llm_call report waits for its run's WorkflowStarted. */
+const START_WAIT_MS = 5_000;
 const GENERATION_ID = /"id"\s*:\s*"(gen-[^"]+)"/;
 
 export interface ProviderAttempt {
@@ -428,11 +430,41 @@ async function readCapped(stream: ReadableStream<Uint8Array> | null): Promise<st
   return text;
 }
 
-/** Per-controller state: the emitter that reports, and each run's pending work. */
+/** Per-controller state: the emitter that reports, each run's pending work and start gate. */
 interface Registration {
   controller: OpenBoxRuntimeController;
   emitter: OpenBoxCopilotKitEmitter;
   pending: Map<string, Set<Promise<void>>>;
+  started: Map<string, { promise: Promise<void>; resolve: () => void }>;
+}
+
+/** The run's start gate, opened by `markRunStarted` once WorkflowStarted is queued. */
+function runStartGate(registration: Registration, runId: string): { promise: Promise<void>; resolve: () => void } {
+  let gate = registration.started.get(runId);
+  if (!gate) {
+    let resolve: () => void = () => undefined;
+    const promise = new Promise<void>(done => {
+      resolve = done;
+    });
+    gate = { promise, resolve };
+    registration.started.set(runId, gate);
+  }
+  return gate;
+}
+
+/**
+ * Resolves once the run's WorkflowStarted is queued, or after
+ * `START_WAIT_MS` (a run nobody marks, e.g. outside the middleware).
+ */
+function whenRunStarted(registration: Registration, runId: string): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<void>(done => {
+    timer = setTimeout(done, START_WAIT_MS);
+    timer.unref?.();
+  });
+  return Promise.race([runStartGate(registration, runId).promise, timeout]).finally(() => {
+    clearTimeout(timer);
+  });
 }
 
 const registrations = new Set<Registration>();
@@ -484,41 +516,54 @@ async function governedOpenRouterFetch(
   const httpFields = { http_method: method, http_url: url, request_body: body, request_headers: null };
   const report = { activityId, activityType: LLM_ACTIVITY_TYPE, runId, workflowId };
 
-  void emitter.emitActivityStarted({
-    activityArgs: { model: requestedModel, messages: Array.isArray(messages) ? messages.length : null },
-    activityId,
-    frontend: false,
-    runId,
-    toolName: LLM_ACTIVITY_TYPE,
-    toolOrigin: TOOL_ORIGIN,
-    workflowId
+  // The model call can fire before the middleware handles RUN_STARTED; the
+  // reports wait for the run's WorkflowStarted (the call itself never waits).
+  const reported = whenRunStarted(registration, runId).then(() => {
+    void emitter.emitActivityStarted({
+      activityArgs: { model: requestedModel, messages: Array.isArray(messages) ? messages.length : null },
+      activityId,
+      frontend: false,
+      runId,
+      toolName: LLM_ACTIVITY_TYPE,
+      toolOrigin: TOOL_ORIGIN,
+      workflowId
+    });
+    emitter.emitHookSpans(report, [
+      span({
+        attributes: { "http.method": method, "http.url": url },
+        endNs: null,
+        extra: { ...httpFields, http_status_code: null, response_body: null, response_headers: null },
+        hookType: "http_request",
+        name: `HTTP ${method}`,
+        spanId: httpSpanId,
+        stage: "started",
+        startNs,
+        traceId
+      })
+    ]);
   });
-  emitter.emitHookSpans(report, [
-    span({
-      attributes: { "http.method": method, "http.url": url },
-      endNs: null,
-      extra: { ...httpFields, http_status_code: null, response_body: null, response_headers: null },
-      hookType: "http_request",
-      name: `HTTP ${method}`,
-      spanId: httpSpanId,
-      stage: "started",
-      startNs,
-      traceId
-    })
-  ]);
+  track(registration, runId, reported);
 
   let response: Response;
   try {
     response = await realFetch(input, init);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    finishLlmCall(registration, report, {
-      error: message,
-      httpSpan: { httpFields, httpSpanId, method, startNs, traceId, url },
-      provenance: null,
-      startedAt,
-      statusCode: null
-    });
+    const endNs = nowNs();
+    track(
+      registration,
+      runId,
+      reported.then(() => {
+        finishLlmCall(registration, report, {
+          endNs,
+          error: message,
+          httpSpan: { httpFields, httpSpanId, method, startNs, traceId, url },
+          provenance: null,
+          startedAt,
+          statusCode: null
+        });
+      })
+    );
     throw err;
   }
 
@@ -545,6 +590,7 @@ async function governedOpenRouterFetch(
       text = "";
     }
     const endedAt = Date.now();
+    const endNs = nowNs();
     const generationId = asString(headerGenerationId) ?? extractGenerationId(text);
     let provenance: RoutingProvenance | null = null;
     if (generationId) {
@@ -554,7 +600,9 @@ async function governedOpenRouterFetch(
         : null;
       provenance = fromRecord ?? fromResponse;
     }
+    await reported;
     finishLlmCall(registration, report, {
+      endNs,
       error: response.ok ? null : `HTTP ${response.status}`,
       httpSpan: { httpFields, httpSpanId, method, startNs, traceId, url },
       provenance,
@@ -573,6 +621,7 @@ function finishLlmCall(
   registration: Registration,
   report: { activityId: string; activityType: string; runId: string; workflowId: string },
   outcome: {
+    endNs: number;
     error: string | null;
     httpSpan: {
       httpFields: Record<string, unknown>;
@@ -589,9 +638,9 @@ function finishLlmCall(
   }
 ): void {
   const { emitter } = registration;
-  const { httpSpan } = outcome;
-  const endNs = nowNs();
-  const spans = [
+  const { endNs, httpSpan } = outcome;
+  // One span per hook payload: the HTTP completion, then the provenance.
+  emitter.emitHookSpans(report, [
     span({
       attributes: {
         "http.method": httpSpan.method,
@@ -613,9 +662,9 @@ function finishLlmCall(
       startNs: httpSpan.startNs,
       traceId: httpSpan.traceId
     })
-  ];
+  ]);
   if (outcome.provenance) {
-    spans.push(
+    emitter.emitHookSpans(report, [
       span({
         attributes: provenanceAttributes(outcome.provenance),
         endNs,
@@ -626,9 +675,8 @@ function finishLlmCall(
         startNs: endNs,
         traceId: httpSpan.traceId
       })
-    );
+    ]);
   }
-  emitter.emitHookSpans(report, spans);
 
   const p = outcome.provenance;
   void emitter.emitActivityCompleted({
@@ -672,14 +720,16 @@ function track(registration: Registration, runId: string, work: Promise<void>): 
 export function attachOpenRouterProvenance(controller: OpenBoxRuntimeController): {
   detach: () => void;
   drainRun: (runId: string) => Promise<void>;
+  markRunStarted: (runId: string) => void;
 } {
   if (!openRouterProvenanceEnabled()) {
-    return { detach: () => undefined, drainRun: () => Promise.resolve() };
+    return { detach: () => undefined, drainRun: () => Promise.resolve(), markRunStarted: () => undefined };
   }
   const registration: Registration = {
     controller,
     emitter: new OpenBoxCopilotKitEmitter(controller, undefined),
-    pending: new Map()
+    pending: new Map(),
+    started: new Map()
   };
   registrations.add(registration);
   if (originalFetch === undefined) {
@@ -700,12 +750,19 @@ export function attachOpenRouterProvenance(controller: OpenBoxRuntimeController)
       }
     },
     drainRun: async runId => {
+      // The run is closing: anything still waiting for its start reports now.
+      runStartGate(registration, runId).resolve();
       const work = [...(registration.pending.get(runId) ?? [])];
-      if (work.length === 0) return;
-      await Promise.race([
-        Promise.allSettled(work),
-        new Promise(resolve => setTimeout(resolve, DRAIN_TIMEOUT_MS))
-      ]);
+      if (work.length > 0) {
+        await Promise.race([
+          Promise.allSettled(work),
+          new Promise(resolve => setTimeout(resolve, DRAIN_TIMEOUT_MS))
+        ]);
+      }
+      registration.started.delete(runId);
+    },
+    markRunStarted: runId => {
+      runStartGate(registration, runId).resolve();
     }
   };
 }

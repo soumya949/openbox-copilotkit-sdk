@@ -9,6 +9,8 @@ import {
   recordFromResponse
 } from "../../../src/copilotkit/internal/openrouter-provenance.js";
 
+import { boundPreparedPayload } from "../../../src/copilotkit/lifecycle-telemetry-payload-bounds.js";
+
 import { buildController } from "./test-utils.js";
 
 const COMPLETION = {
@@ -103,6 +105,7 @@ describe("attachOpenRouterProvenance", () => {
     stubOpenRouter();
     const { controller, evaluateMock } = buildController();
     const provenance = attachOpenRouterProvenance(controller);
+    provenance.markRunStarted("run-1");
 
     const response = await controller.runContext.enterRunContext({ runId: "run-1", workflowId: "thread-1" }, () =>
       fetch("https://openrouter.ai/api/v1/chat/completions", REQUEST_INIT)
@@ -119,6 +122,7 @@ describe("attachOpenRouterProvenance", () => {
       ["ActivityStarted", false],
       ["ActivityStarted", true],
       ["ActivityStarted", true],
+      ["ActivityStarted", true],
       ["ActivityCompleted", false]
     ]);
     for (const payload of sent) {
@@ -126,20 +130,49 @@ describe("attachOpenRouterProvenance", () => {
     }
     const started = (sent[1]!.spans as Record<string, unknown>[])[0]!;
     expect(started).toMatchObject({ end_time: null, hook_type: "http_request", stage: "started" });
-    const [httpCompleted, provenanceSpan] = sent[2]!.spans as Record<string, unknown>[];
+    // Core takes one span per hook payload.
+    expect(sent.slice(1, 4).map(p => (p.spans as unknown[]).length)).toEqual([1, 1, 1]);
+    const httpCompleted = (sent[2]!.spans as Record<string, unknown>[])[0]!;
+    const provenanceSpan = (sent[3]!.spans as Record<string, unknown>[])[0]!;
     expect(httpCompleted).toMatchObject({ hook_type: "http_request", http_status_code: 200, stage: "completed" });
     expect(provenanceSpan).toMatchObject({ hook_type: "llm_provenance", stage: "completed" });
-    expect(provenanceSpan!.attributes).toMatchObject({
+    expect(provenanceSpan.attributes).toMatchObject({
       "gen_ai.generation.id": "gen-123",
       "gen_ai.upstream.data_region": "us",
       "gen_ai.upstream.provider": "OpenAI",
       "gen_ai.usage.tokens_prompt": 40,
       "openbox.model.honored": true
     });
-    expect(sent[3]).toMatchObject({
+    expect(sent[4]).toMatchObject({
       activity_output: { generation_id: "gen-123", model: "openai/gpt-4o-mini", provider: "OpenAI" },
       status: "completed"
     });
+  });
+
+  it("holds the llm_call reports until the run's WorkflowStarted is queued", async () => {
+    stubOpenRouter();
+    const { controller, evaluateMock } = buildController();
+    const provenance = attachOpenRouterProvenance(controller);
+
+    const response = await controller.runContext.enterRunContext({ runId: "run-1", workflowId: "thread-1" }, () =>
+      fetch("https://openrouter.ai/api/v1/chat/completions", REQUEST_INIT)
+    );
+    await response.json();
+    await controller.telemetryQueue.flush();
+    expect(evaluateMock).not.toHaveBeenCalled();
+
+    provenance.markRunStarted("run-1");
+    await provenance.drainRun("run-1");
+    await controller.telemetryQueue.flush();
+    provenance.detach();
+
+    expect(evaluateMock.mock.calls.map(call => (call[0] as Record<string, unknown>).event_type)).toEqual([
+      "ActivityStarted",
+      "ActivityStarted",
+      "ActivityStarted",
+      "ActivityStarted",
+      "ActivityCompleted"
+    ]);
   });
 
   it("does not report OpenRouter calls made outside a governed run", async () => {
@@ -177,5 +210,21 @@ describe("attachOpenRouterProvenance", () => {
     expect(globalThis.fetch).not.toBe(stub);
     provenance.detach();
     expect(globalThis.fetch).toBe(stub);
+  });
+});
+
+describe("hook span size bounds", () => {
+  it("trims an oversized span's bodies and keeps spans an array", () => {
+    const spans = [{ hook_type: "http_request", request_body: "x".repeat(20_000), response_body: "y".repeat(20_000) }];
+    const { payload, fieldsTruncated } = boundPreparedPayload(
+      { event_type: "ActivityStarted", run_id: "run-1", spans },
+      { maxFieldBytes: 8_192, maxPayloadBytes: 262_144 }
+    );
+    expect(fieldsTruncated).toEqual(["spans"]);
+    const bounded = payload!.spans as Record<string, string>[];
+    expect(Array.isArray(bounded)).toBe(true);
+    expect(JSON.stringify(bounded).length).toBeLessThanOrEqual(8_192);
+    expect(bounded[0]!.hook_type).toBe("http_request");
+    expect(bounded[0]!.request_body).toMatch(/…\[truncated, 20000 bytes\]$/);
   });
 });

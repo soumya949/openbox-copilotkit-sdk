@@ -409,6 +409,7 @@ export class OpenBoxMiddleware extends Middleware {
             signalName: USER_PROMPT_SIGNAL_NAME,
             workflowId: state.workflowId
           });
+          this.#runtime.openRouterProvenance?.markRunStarted?.(state.runId);
         }
         return undefined;
       }

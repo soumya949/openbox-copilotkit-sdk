@@ -30,6 +30,16 @@ export const DEFAULT_MAX_PAYLOAD_BYTES = 262_144;
 /** Bytes kept in a truncated-field preview marker — deliberately small; it exists for human debugging only. */
 const PREVIEW_BYTES = 256;
 
+/**
+ * Hook spans: Core accepts `spans` only as an array of span dicts, so an
+ * oversized one is bounded by trimming the long strings inside its spans
+ * (request/response bodies), never by collapsing the array to a marker.
+ */
+const SPANS_FIELD = "spans";
+
+/** Smallest per-string budget `fitSpans` trims down to. */
+const MIN_SPAN_STRING_BYTES = 256;
+
 /** Wire fields Core needs to route/correlate an event — NEVER truncated, collapsed, or dropped. */
 export const CORRELATION_FIELDS: ReadonlySet<string> = new Set([
   "workflow_id",
@@ -81,6 +91,44 @@ export function buildTruncatedFieldMarker(value: JsonValue): TruncatedFieldMarke
   };
 }
 
+/** Trim every string in `value` longer than `maxBytes`, noting the original size. */
+function trimStrings(value: JsonValue, maxBytes: number): JsonValue {
+  if (typeof value === "string") {
+    const bytes = Buffer.byteLength(value, "utf8");
+    return bytes > maxBytes
+      ? `${truncateToUtf8ByteLimit(value, maxBytes)}…[truncated, ${bytes} bytes]`
+      : value;
+  }
+  if (Array.isArray(value)) {
+    return value.map(item => trimStrings(item, maxBytes));
+  }
+  if (value !== null && typeof value === "object") {
+    const out: Record<string, JsonValue> = {};
+    for (const [key, item] of Object.entries(value)) {
+      out[key] = trimStrings(item, maxBytes);
+    }
+    return out;
+  }
+  return value;
+}
+
+/**
+ * Bound a hook `spans` array to `maxBytes` by halving the per-string budget
+ * until it fits (or the budget reaches its floor). Always returns an array.
+ */
+export function fitSpans(spans: JsonValue[], maxBytes: number): FieldTruncationResult {
+  if (jsonByteLength(spans) <= maxBytes) {
+    return { truncated: false, value: spans };
+  }
+  let budget = maxBytes;
+  let fitted: JsonValue = spans;
+  while (budget > MIN_SPAN_STRING_BYTES && jsonByteLength(fitted) > maxBytes) {
+    budget = Math.max(MIN_SPAN_STRING_BYTES, Math.floor(budget / 2));
+    fitted = trimStrings(spans, budget);
+  }
+  return { truncated: true, value: fitted };
+}
+
 export interface FieldTruncationResult {
   truncated: boolean;
   value: JsonValue;
@@ -128,7 +176,11 @@ export function boundPreparedPayload(
   const truncatableKeys = Object.keys(working).filter(key => !CORRELATION_FIELDS.has(key));
 
   for (const key of truncatableKeys) {
-    const { value, truncated } = truncateFieldIfOversized(working[key]!, opts.maxFieldBytes);
+    const field = working[key]!;
+    const { value, truncated } =
+      key === SPANS_FIELD && Array.isArray(field)
+        ? fitSpans(field, opts.maxFieldBytes)
+        : truncateFieldIfOversized(field, opts.maxFieldBytes);
     if (truncated) {
       working[key] = value;
       fieldsTruncated.push(key);
@@ -160,7 +212,8 @@ function largestTruncatableField(
   let largestSize = -1;
   for (const key of truncatableKeys) {
     const value = payload[key];
-    if (value === undefined || isTruncatedFieldMarker(value)) {
+    // Spans are already trimmed; a marker in their place is a Core 400.
+    if (value === undefined || isTruncatedFieldMarker(value) || key === SPANS_FIELD) {
       continue;
     }
     const size = jsonByteLength(value);
