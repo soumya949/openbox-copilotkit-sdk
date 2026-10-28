@@ -165,6 +165,44 @@ describe("resume handling — connects to the pending interrupt (RT-F5/RT-F9)", 
     // normally.
     const completedWorkflows = byEventType(payloads, WorkflowEventType.WORKFLOW_COMPLETED);
     expect(completedWorkflows.filter(p => p["run_id"] === "run-2")).toHaveLength(1);
+
+    // Its last interrupt resolved, the interrupted run itself is closed —
+    // once, after the correction that resolved it.
+    const originalClose = completedWorkflows.filter(p => p["run_id"] === "run-1");
+    expect(originalClose).toHaveLength(1);
+    expect(originalClose[0]).toMatchObject({ activity_id: "run-1-wf", workflow_id: "thread-1" });
+    expect(payloads.indexOf(originalClose[0]!)).toBeGreaterThan(payloads.indexOf(correction!));
+  });
+
+  it("keeps the interrupted run open while it still has unresolved interrupts", async () => {
+    const { controller, evaluateMock } = buildController();
+    const store = controller.interruptStore;
+    store.save(
+      "run-1",
+      [
+        { activityId: "interrupt-a", reason: "approval", toolName: "approve", workflowId: "thread-1" },
+        { activityId: "interrupt-b", reason: "approval", toolName: "approve", workflowId: "thread-1" }
+      ],
+      60_000
+    );
+    const resumeFixture = loadResumeFixture("run-finished-resume");
+    const resumeInput = {
+      ...resumeFixture.runInput,
+      forwardedProps: { resume: [{ interruptId: "interrupt-a", status: "resolved", payload: { ok: true } }] }
+    };
+
+    await runEvents(controller, resumeFixture.events, resumeInput);
+
+    const payloads = payloadsOf(evaluateMock);
+    const resolved = byEventType(payloads, WorkflowEventType.ACTIVITY_COMPLETED).find(
+      p => p["run_id"] === "run-1" && p["activity_id"] === "interrupt-a"
+    );
+    expect(resolved).toMatchObject({ status: "completed" });
+    const runOneClosed = byEventType(payloads, WorkflowEventType.WORKFLOW_COMPLETED).filter(
+      p => p["run_id"] === "run-1"
+    );
+    expect(runOneClosed).toHaveLength(0);
+    expect(store.hasPending?.("run-1")).toBe(true);
   });
 
   it("a cancelled resume maps to an aborted ActivityCompleted (not completed)", async () => {

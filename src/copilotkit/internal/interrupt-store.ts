@@ -59,6 +59,12 @@ export interface InterruptPersistencePort {
   take(runId: string, interruptId: string): PendingInterrupt | undefined;
   /** Drop every remaining entry for `runId` (bounds memory on a long-lived runtime). */
   clearRun(runId: string): void;
+  /**
+   * Whether `runId` still has unexpired pending interrupts. Optional: when
+   * absent, a resume that resolves interrupts is taken to resolve the run's
+   * last ones, and the interrupted run is closed.
+   */
+  hasPending?(runId: string): boolean;
 }
 
 interface StoredEntry {
@@ -118,6 +124,17 @@ export class InMemoryInterruptStore implements InterruptPersistencePort {
     // resume-with-no-pending branch (RT-F9) already treats an `undefined`
     // result as a typed failure, never a fabricated completion.
     return entry.expiresAt > this.#clock() ? entry.value : undefined;
+  }
+
+  public hasPending(runId: string): boolean {
+    const now = this.#clock();
+    for (const key of this.#keysByRun.get(runId) ?? []) {
+      const entry = this.#entries.get(key);
+      if (entry && entry.expiresAt > now) {
+        return true;
+      }
+    }
+    return false;
   }
 
   public clearRun(runId: string): void {

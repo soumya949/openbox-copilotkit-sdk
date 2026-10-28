@@ -738,6 +738,8 @@ export class OpenBoxMiddleware extends Middleware {
     state: PerRunState;
   }): Promise<boolean> {
     const originalRunId = state.parentRunId ?? state.runId;
+    let originalWorkflowId: string | undefined;
+    let originalMultiAgentSessionId: string | undefined;
 
     for (const entry of state.resumeEntries) {
       const pending = this.#runtime.interruptStore.take(originalRunId, entry.interruptId);
@@ -779,6 +781,28 @@ export class OpenBoxMiddleware extends Middleware {
         toolName: pending.toolName,
         workflowId: pending.workflowId
       });
+      originalWorkflowId = pending.workflowId;
+      originalMultiAgentSessionId = pending.multiAgentSessionId;
+    }
+
+    // The interrupted run suspended without a terminal event; once its last
+    // interrupt is resolved, it is over. (A resume under the same run id is
+    // closed by this run's own outcome instead.)
+    const interrupts = this.#runtime.interruptStore;
+    if (
+      originalRunId !== state.runId &&
+      originalWorkflowId !== undefined &&
+      !(interrupts.hasPending?.(originalRunId) ?? false)
+    ) {
+      await this.#emitter.emitWorkflowCompleted({
+        agentId: state.agentId,
+        goal,
+        metadata,
+        multiAgentSessionId: originalMultiAgentSessionId,
+        runId: originalRunId,
+        workflowId: originalWorkflowId
+      });
+      interrupts.clearRun(originalRunId);
     }
 
     return false;
