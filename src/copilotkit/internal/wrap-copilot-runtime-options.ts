@@ -15,6 +15,7 @@ import {
   type OpenBoxAfterRequestOptions
 } from "./after-request.js";
 import { buildBaseRuntime } from "./base-runtime-builder.js";
+import { attachOpenRouterProvenance } from "./openrouter-provenance.js";
 import {
   openBoxBeforeRequest,
   type BeforeRequestMiddlewareParametersLike,
@@ -250,19 +251,25 @@ function buildOwnController(
       ...(instrumentationOptions !== undefined ? { instrumentation: instrumentationOptions } : {})
     }
   );
+  const controller: OpenBoxRuntimeController = {
+    runtime,
+    runContext,
+    telemetryQueue,
+    childAgentClients,
+    defaults: extras.defaults ?? {},
+    logger,
+    serverToolOwnership: new ServerToolOwnershipRegistry(),
+    interruptStore: extras.interruptStore ?? new InMemoryInterruptStore(),
+    runTerminalState: new RunTerminalStateRegistry()
+  };
+  const provenance = attachOpenRouterProvenance(controller);
+  controller.openRouterProvenance = provenance;
   return {
-    controller: {
-      runtime,
-      runContext,
-      telemetryQueue,
-      childAgentClients,
-      defaults: extras.defaults ?? {},
-      logger,
-      serverToolOwnership: new ServerToolOwnershipRegistry(),
-      interruptStore: extras.interruptStore ?? new InMemoryInterruptStore(),
-      runTerminalState: new RunTerminalStateRegistry()
-    },
-    shutdown
+    controller,
+    shutdown: async () => {
+      provenance.detach();
+      await shutdown();
+    }
   };
 }
 

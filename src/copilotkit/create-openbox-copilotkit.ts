@@ -4,6 +4,7 @@ import type { OpenBoxRuntime } from "@openbox-ai/openbox-sdk-ts/runtime";
 import type { OpenBoxConfigInput } from "../config/openbox-config.js";
 
 import { buildBaseRuntime } from "./internal/base-runtime-builder.js";
+import { attachOpenRouterProvenance } from "./internal/openrouter-provenance.js";
 import type { TelemetryQueueOptions } from "./lifecycle-telemetry.js";
 import { InMemoryInterruptStore } from "./internal/interrupt-store.js";
 import { RunTerminalStateRegistry } from "./internal/run-terminal-state.js";
@@ -115,6 +116,8 @@ export async function createOpenBoxCopilotKit(
     serverToolOwnership: new ServerToolOwnershipRegistry(),
     telemetryQueue: built.telemetryQueue
   };
+  const provenance = attachOpenRouterProvenance(controller);
+  controller.openRouterProvenance = provenance;
   const resolvedEnforcement = enforcement ?? {};
 
   const withRuntimeConfig: WithOpenBoxRuntimeConfig = {
@@ -126,7 +129,10 @@ export async function createOpenBoxCopilotKit(
   return {
     openboxRuntime: built.runtime,
     serverTool: tool => wrapServerTool(tool, controller, resolvedEnforcement),
-    shutdown: built.shutdown,
+    shutdown: async () => {
+      provenance.detach();
+      await built.shutdown();
+    },
     withRuntime: (options, config = {}) => {
       if (canShareController(config)) {
         return buildOpenBoxRuntime(options, { ...withRuntimeConfig, ...config }, controller);

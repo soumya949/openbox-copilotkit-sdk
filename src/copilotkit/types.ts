@@ -64,6 +64,12 @@ export interface OpenBoxRuntimeController {
   interruptStore: InterruptPersistencePort;
   runTerminalState: RunTerminalStateRegistry;
   childAgentClients: ChildAgentClientCache;
+  /**
+   * Reports OpenRouter model calls made during this controller's runs (see
+   * `internal/openrouter-provenance.ts`). A run's closing event waits for the
+   * run's pending provenance via `drainRun`.
+   */
+  openRouterProvenance?: { drainRun: (runId: string) => Promise<void> } | undefined;
 }
 
 /**
