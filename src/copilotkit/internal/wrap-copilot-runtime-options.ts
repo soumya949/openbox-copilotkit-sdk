@@ -94,6 +94,15 @@ export interface WrapCopilotRuntimeOptionsExtras {
    * flag, which is format/shape validation only (no network).
    */
   validateApiKeyAtStartup?: boolean | undefined;
+  /**
+   * Reuse an existing controller (a `createOpenBoxCopilotKit` bundle's)
+   * instead of building a new base runtime. The middleware then shares the
+   * owner's run correlation, server-tool ownership, telemetry queue and
+   * client, so the owner's `serverTool()` can enforce and is not reported
+   * twice. The owner keeps responsibility for shutdown: the returned
+   * `shutdown` does not close the shared runtime.
+   */
+  sharedController?: OpenBoxRuntimeController | undefined;
 }
 
 /**
@@ -164,33 +173,24 @@ export async function wrapCopilotRuntimeOptions<
   configInput: OpenBoxConfigInput = {},
   extras: WrapCopilotRuntimeOptionsExtras = {}
 ): Promise<WrapCopilotRuntimeOptionsResult<TOptions>> {
-  const logger = extras.logger ?? DEFAULT_LOGGER;
-  const telemetryOptions = extras.middlewareOptions?.telemetry;
-  const instrumentationOptions = extras.middlewareOptions?.instrumentation;
-  const { runtime, runContext, telemetryQueue, childAgentClients, shutdown } = buildBaseRuntime(
-    configInput,
-    {
-      logger,
-      ...(telemetryOptions !== undefined ? { telemetry: telemetryOptions } : {}),
-      ...(instrumentationOptions !== undefined ? { instrumentation: instrumentationOptions } : {})
-    }
-  );
+  const shared = extras.sharedController;
+  const logger = extras.logger ?? shared?.logger ?? DEFAULT_LOGGER;
+  const { controller, shutdown } = shared
+    ? {
+        controller: {
+          ...shared,
+          defaults: extras.defaults ?? shared.defaults,
+          logger
+        } satisfies OpenBoxRuntimeController,
+        // The owner (the bundle) closes the shared runtime.
+        shutdown: () => Promise.resolve()
+      }
+    : buildOwnController(configInput, extras, logger);
+  const runtime = controller.runtime;
 
   if (extras.validateApiKeyAtStartup) {
     await runtime.client.validateApiKey();
   }
-
-  const controller: OpenBoxRuntimeController = {
-    runtime,
-    runContext,
-    telemetryQueue,
-    childAgentClients,
-    defaults: extras.defaults ?? {},
-    logger,
-    serverToolOwnership: new ServerToolOwnershipRegistry(),
-    interruptStore: extras.interruptStore ?? new InMemoryInterruptStore(),
-    runTerminalState: new RunTerminalStateRegistry()
-  };
 
   const markerSymbol = Symbol("openbox.copilotkit.wrap");
   const middlewareOptions = extras.middlewareOptions;
@@ -232,6 +232,38 @@ export async function wrapCopilotRuntimeOptions<
   } as unknown as WrappedCopilotRuntimeOptions<TOptions>;
 
   return { controller, options: nextOptions, shutdown };
+}
+
+/** A controller over a newly built base runtime, owned (and shut down) by this wrap. */
+function buildOwnController(
+  configInput: OpenBoxConfigInput,
+  extras: WrapCopilotRuntimeOptionsExtras,
+  logger: OpenBoxLogger
+): { controller: OpenBoxRuntimeController; shutdown: () => Promise<void> } {
+  const telemetryOptions = extras.middlewareOptions?.telemetry;
+  const instrumentationOptions = extras.middlewareOptions?.instrumentation;
+  const { runtime, runContext, telemetryQueue, childAgentClients, shutdown } = buildBaseRuntime(
+    configInput,
+    {
+      logger,
+      ...(telemetryOptions !== undefined ? { telemetry: telemetryOptions } : {}),
+      ...(instrumentationOptions !== undefined ? { instrumentation: instrumentationOptions } : {})
+    }
+  );
+  return {
+    controller: {
+      runtime,
+      runContext,
+      telemetryQueue,
+      childAgentClients,
+      defaults: extras.defaults ?? {},
+      logger,
+      serverToolOwnership: new ServerToolOwnershipRegistry(),
+      interruptStore: extras.interruptStore ?? new InMemoryInterruptStore(),
+      runTerminalState: new RunTerminalStateRegistry()
+    },
+    shutdown
+  };
 }
 
 interface WrapAgentsContext {

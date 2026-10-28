@@ -74,6 +74,19 @@ export async function withOpenBoxRuntime(
   options: CopilotRuntimeOptions,
   config: WithOpenBoxRuntimeConfig = {}
 ): Promise<WithOpenBoxRuntimeResult> {
+  return buildOpenBoxRuntime(options, config);
+}
+
+/**
+ * `withOpenBoxRuntime`, optionally over an existing controller (a
+ * `createOpenBoxCopilotKit` bundle's) — see
+ * `WrapCopilotRuntimeOptionsExtras.sharedController`. Internal.
+ */
+export async function buildOpenBoxRuntime(
+  options: CopilotRuntimeOptions,
+  config: WithOpenBoxRuntimeConfig = {},
+  sharedController?: OpenBoxRuntimeController
+): Promise<WithOpenBoxRuntimeResult> {
   if (isCopilotRuntimeInstance(options)) {
     throw new TypeError(INSTANCE_FORM_MESSAGE);
   }
@@ -88,7 +101,8 @@ export async function withOpenBoxRuntime(
       ...(defaults !== undefined ? { defaults } : {}),
       ...(logger !== undefined ? { logger } : {}),
       ...(middlewareOptions !== undefined ? { middlewareOptions } : {}),
-      ...(validateApiKeyAtStartup !== undefined ? { validateApiKeyAtStartup } : {})
+      ...(validateApiKeyAtStartup !== undefined ? { validateApiKeyAtStartup } : {}),
+      ...(sharedController !== undefined ? { sharedController } : {})
     }
   );
 

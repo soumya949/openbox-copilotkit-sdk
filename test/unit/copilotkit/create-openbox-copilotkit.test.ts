@@ -7,9 +7,35 @@
  * DNS lookup) and every call below uses the DEFAULT `telemetry` mode, which
  * never awaits its background send.
  */
-import { describe, expect, it } from "vitest";
+import { AbstractAgent, EventType, type BaseEvent } from "@ag-ui/client";
+import { EMPTY, Observable } from "rxjs";
+import { describe, expect, it, vi } from "vitest";
 
 import { createOpenBoxCopilotKit } from "../../../src/copilotkit/create-openbox-copilotkit.js";
+import { getOpenBoxRuntime } from "../../../src/copilotkit/runtime-symbol.js";
+import type { OpenBoxRuntimeController } from "../../../src/copilotkit/types.js";
+
+class IdleAgent extends AbstractAgent {
+  public override run(): Observable<BaseEvent> {
+    return new Observable<BaseEvent>(subscriber => {
+      subscriber.next({ type: EventType.RUN_STARTED } as BaseEvent);
+      subscriber.next({ type: EventType.RUN_FINISHED } as BaseEvent);
+      subscriber.complete();
+    });
+  }
+
+  public override clone(): AbstractAgent {
+    return new IdleAgent();
+  }
+
+  protected override connect(): ReturnType<AbstractAgent["connect"]> {
+    return EMPTY;
+  }
+}
+
+function isClosed(client: unknown): boolean {
+  return (JSON.parse(JSON.stringify(client)) as { closed: boolean }).closed;
+}
 
 const TEST_CONFIG = {
   apiKey: "obx_test_create_openbox_copilotkit",
@@ -74,5 +100,40 @@ describe("createOpenBoxCopilotKit", () => {
 
     await expect(bundle.shutdown()).resolves.toBeUndefined();
     await expect(bundle.shutdown()).resolves.toBeUndefined();
+  });
+
+  it("withRuntime shares the bundle's controller, so serverTool() and the middleware share run correlation", async () => {
+    const bundle = await createOpenBoxCopilotKit(TEST_CONFIG);
+
+    const { runtime, shutdown } = await bundle.withRuntime(
+      { agents: { default: new IdleAgent() } },
+      { defaults: { agentId: "support" } }
+    );
+    const controller = getOpenBoxRuntime<OpenBoxRuntimeController>(runtime);
+
+    expect(controller?.runtime).toBe(bundle.openboxRuntime);
+    expect(controller?.defaults).toEqual({ agentId: "support" });
+
+    await shutdown();
+    expect(isClosed(bundle.openboxRuntime.client)).toBe(false);
+    await bundle.shutdown();
+    expect(isClosed(bundle.openboxRuntime.client)).toBe(true);
+  });
+
+  it("withRuntime with different connection settings gets its own controller and says so", async () => {
+    const warn = vi.fn();
+    const bundle = await createOpenBoxCopilotKit({ ...TEST_CONFIG, logger: { warn } });
+
+    const { runtime, shutdown } = await bundle.withRuntime(
+      { agents: { default: new IdleAgent() } },
+      { apiKey: "obx_test_other_agent" }
+    );
+    const controller = getOpenBoxRuntime<OpenBoxRuntimeController>(runtime);
+
+    expect(controller?.runtime).not.toBe(bundle.openboxRuntime);
+    expect(warn).toHaveBeenCalledWith(expect.objectContaining({ reason: "with_runtime_separate_controller" }));
+
+    await shutdown();
+    await bundle.shutdown();
   });
 });

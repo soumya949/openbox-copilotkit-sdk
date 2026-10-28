@@ -10,6 +10,7 @@ import { ServerToolOwnershipRegistry } from "./internal/server-tool-ownership.js
 import { serverTool as wrapServerTool } from "./server-tool.js";
 import type { OpenBoxEnforcementOptions, OpenBoxLogger, OpenBoxRuntimeController } from "./types.js";
 import {
+  buildOpenBoxRuntime,
   withOpenBoxRuntime,
   type WithOpenBoxRuntimeConfig,
   type WithOpenBoxRuntimeResult
@@ -45,9 +46,10 @@ export interface OpenBoxCopilotKitBundle {
    */
   serverTool: <T>(tool: T) => T;
   /**
-   * Idempotent shutdown for `openboxRuntime`. Does NOT close runtimes created
-   * by calls to `withRuntime` — each of those returns its own `shutdown`
-   * (identical contract to `withOpenBoxRuntime`), which the caller owns.
+   * Idempotent shutdown for `openboxRuntime`, which every `withRuntime`
+   * runtime sharing this bundle's controller uses — call it last. Their own
+   * `shutdown` only detaches; a `withRuntime` runtime with its own controller
+   * (see `createOpenBoxCopilotKit`) is closed by its own `shutdown`.
    */
   shutdown: () => Promise<void>;
   /** Attach this bundle's config to a CopilotKit runtime (delegates to `withOpenBoxRuntime`). */
@@ -65,16 +67,14 @@ export interface OpenBoxCopilotKitBundle {
  * wrapper and a `withRuntime` convenience that attaches this bundle's config
  * to a CopilotKit runtime.
  *
- * NOTE: `withRuntime` builds its OWN separate controller (via
- * `withOpenBoxRuntime` -> `wrapCopilotRuntimeOptions` -> `buildBaseRuntime`)
- * rather than reusing this bundle's — this mirrors `shutdown`'s existing
- * documented independence (each `withRuntime` call owns its own runtime/
- * shutdown). Practical effect: `bundle.serverTool()`'s run-correlation
- * (`controller.runContext`) is populated by an AG-UI middleware bound to
- * THIS bundle's controller, not by one constructed through `withRuntime`.
- * Compose the middleware against this bundle's own controller directly
- * (`createOpenBoxMiddleware`) when using `serverTool()` for real governance
- * rather than telemetry-mode-with-generated-ids.
+ * `withRuntime` attaches the CopilotKit runtime to THIS bundle's controller,
+ * so its middleware and `serverTool()` share one run correlation, server-tool
+ * ownership registry, telemetry queue and client: wrapped tools enforce in
+ * `enforce` mode and are reported once. A `withRuntime` config that changes
+ * connection/identity settings or telemetry/instrumentation options cannot
+ * reuse the bundle's runtime; that runtime gets its own controller (logged),
+ * owns its own `shutdown`, and `serverTool()` cannot enforce through it.
+ * `bundle.shutdown()` closes the shared runtime.
  */
 export async function createOpenBoxCopilotKit(
   opts: CreateOpenBoxCopilotKitOptions = {}
@@ -123,7 +123,36 @@ export async function createOpenBoxCopilotKit(
     openboxRuntime: built.runtime,
     serverTool: tool => wrapServerTool(tool, controller, resolvedEnforcement),
     shutdown: built.shutdown,
-    withRuntime: (options, config = {}) =>
-      withOpenBoxRuntime(options, { ...withRuntimeConfig, ...config })
+    withRuntime: (options, config = {}) => {
+      if (canShareController(config)) {
+        return buildOpenBoxRuntime(options, { ...withRuntimeConfig, ...config }, controller);
+      }
+      (logger ?? console).warn?.({
+        note: "openbox withRuntime: config overrides connection, identity, telemetry or instrumentation settings, so this runtime gets its own controller; bundle.serverTool() cannot enforce or de-duplicate calls made through it.",
+        reason: "with_runtime_separate_controller"
+      });
+      return withOpenBoxRuntime(options, { ...withRuntimeConfig, ...config });
+    }
   };
+}
+
+/** `withRuntime` settings that apply per CopilotKit runtime, on top of the bundle's controller. */
+const PER_RUNTIME_KEYS: ReadonlySet<string> = new Set([
+  "defaults",
+  "logger",
+  "middlewareOptions",
+  "validateApiKeyAtStartup"
+]);
+
+/**
+ * True when `config` changes nothing the bundle's runtime was built with, so
+ * the CopilotKit runtime can share the bundle's controller (and with it the
+ * run correlation `serverTool()` needs).
+ */
+function canShareController(config: WithOpenBoxRuntimeConfig): boolean {
+  const changesRuntime = Object.entries(config).some(
+    ([key, value]) => value !== undefined && !PER_RUNTIME_KEYS.has(key)
+  );
+  const middleware = config.middlewareOptions;
+  return !changesRuntime && middleware?.telemetry === undefined && middleware?.instrumentation === undefined;
 }
