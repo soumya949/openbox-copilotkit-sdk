@@ -1,5 +1,4 @@
 import { CoreAdapter } from "@openbox-ai/openbox-sdk-ts/adapters";
-import { ApprovalPoller } from "@openbox-ai/openbox-sdk-ts/approvals";
 import { type ClientLogger, OpenBoxClient } from "@openbox-ai/openbox-sdk-ts/client";
 import { ContextStore } from "@openbox-ai/openbox-sdk-ts/context";
 import { OpenBoxRuntime } from "@openbox-ai/openbox-sdk-ts/runtime";
@@ -8,6 +7,7 @@ import type { OpenBoxConfigInput } from "../../config/openbox-config.js";
 import { LifecycleTelemetryQueue, type TelemetryQueueOptions } from "../lifecycle-telemetry.js";
 import type { OpenBoxLogger } from "../types.js";
 
+import { AwaitedApprovalAdapter } from "./approval-id-guard.js";
 import { ChildAgentClientCache } from "./child-agent-client-cache.js";
 import { resolveCopilotKitBaseConfig, resolveTelemetryQueueOptions } from "./config-translator.js";
 import {
@@ -81,25 +81,21 @@ export function buildBaseRuntime(
   // on `shutdown` below).
   const shutdownController = new AbortController();
 
-  // Critical: the default `OpenBoxRuntime` builds a `CoreAdapter` with NO
-  // poller, so REQUIRE_APPROVAL fails safe (rejected) unless a poller is
-  // wired in here when HITL is enabled.
-  const approvalPoller = config.hitl.enabled
-    ? new ApprovalPoller(client, {
+  // The base `CoreAdapter` (no poller ⇒ REQUIRE_APPROVAL fails safe as
+  // rejected), or — with HITL — one that binds each wait to the approval
+  // Core opened for it (see `approval-id-guard.ts`). Either way it enforces
+  // the incomplete-correlation fail-safe and routes BLOCK/HALT through
+  // `raiseLifecycleBlocked`; CopilotKit-specific error translation happens at
+  // the caller boundary, not inside the adapter.
+  const adapter = config.hitl.enabled
+    ? new AwaitedApprovalAdapter(client, {
         maxWaitMs:
           opts.approvalMaxWaitMs === undefined
             ? DEFAULT_APPROVAL_MAX_WAIT_MS
             : opts.approvalMaxWaitMs,
         abortSignal: shutdownController.signal
       })
-    : null;
-
-  // Stock `CoreAdapter` only — no custom framework adapter (RT-F12). It
-  // already enforces the no-poller + incomplete-correlation fail-safes for
-  // REQUIRE_APPROVAL and routes BLOCK/HALT through `raiseLifecycleBlocked`;
-  // CopilotKit-specific error translation happens at the caller boundary
-  // (Phases 4-5), not inside a reimplemented adapter.
-  const adapter = new CoreAdapter({ approvalPoller });
+    : new CoreAdapter({ approvalPoller: null });
 
   const contextStore = new ContextStore();
 
