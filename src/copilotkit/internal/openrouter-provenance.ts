@@ -663,18 +663,26 @@ function finishLlmCall(
       traceId: httpSpan.traceId
     })
   ]);
-  if (outcome.provenance) {
+  const record = outcome.provenance;
+  if (record) {
+    // As in the reference SDK: OpenRouter's record of who served the call.
     emitter.emitHookSpans(report, [
-      span({
-        attributes: provenanceAttributes(outcome.provenance),
-        endNs,
-        hookType: "llm_provenance",
-        name: "openrouter.provenance",
-        spanId: hexId(8),
-        stage: "completed",
-        startNs: endNs,
-        traceId: httpSpan.traceId
-      })
+      {
+        ...span({
+          attributes: provenanceAttributes(record),
+          endNs,
+          hookType: "llm_provenance",
+          name: `served by ${record.provider ?? "an unreported provider"}${record.model !== null ? ` (${record.model})` : ""}`,
+          spanId: hexId(8),
+          stage: "completed",
+          startNs: endNs,
+          traceId: httpSpan.traceId
+        }),
+        activity_id: report.activityId,
+        duration_ns: record.latencyMs !== null ? record.latencyMs * 1_000_000 : null,
+        gen_ai_system: record.provider ?? "openrouter",
+        semantic_type: "llm_provenance"
+      }
     ]);
   }
 

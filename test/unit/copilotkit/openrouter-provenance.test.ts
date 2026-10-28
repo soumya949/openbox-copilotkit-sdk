@@ -135,7 +135,15 @@ describe("attachOpenRouterProvenance", () => {
     const httpCompleted = (sent[2]!.spans as Record<string, unknown>[])[0]!;
     const provenanceSpan = (sent[3]!.spans as Record<string, unknown>[])[0]!;
     expect(httpCompleted).toMatchObject({ hook_type: "http_request", http_status_code: 200, stage: "completed" });
-    expect(provenanceSpan).toMatchObject({ hook_type: "llm_provenance", stage: "completed" });
+    expect(provenanceSpan).toMatchObject({
+      activity_id: sent[0]!.activity_id,
+      duration_ns: 812_000_000,
+      gen_ai_system: "OpenAI",
+      hook_type: "llm_provenance",
+      name: "served by OpenAI (openai/gpt-4o-mini)",
+      semantic_type: "llm_provenance",
+      stage: "completed"
+    });
     expect(provenanceSpan.attributes).toMatchObject({
       "gen_ai.generation.id": "gen-123",
       "gen_ai.upstream.data_region": "us",
