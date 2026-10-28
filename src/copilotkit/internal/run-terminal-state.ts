@@ -7,7 +7,7 @@ const DEFAULT_MAX_ENTRIES = 10_000;
 export interface RunTerminalStateSnapshot {
   /** Set when `RUN_FINISHED.outcome` was an interrupt — the run is suspended, not done. */
   readonly interrupted: boolean;
-  /** Set when the AG-UI stream itself already emitted the terminal `agent_output` signal. */
+  /** Set when the AG-UI stream itself already recorded the run's output (on `WorkflowCompleted`). */
   readonly outputEmitted: boolean;
 }
 

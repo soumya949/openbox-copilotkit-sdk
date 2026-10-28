@@ -67,6 +67,7 @@ export interface ActivityCompletedInput {
 }
 
 export interface WorkflowCompletedInput extends MultiAgentEventFields {
+  agentId?: string | undefined;
   agentOutput?: unknown;
   durationMs?: number | undefined;
   endTime?: number | undefined;
@@ -78,6 +79,8 @@ export interface WorkflowCompletedInput extends MultiAgentEventFields {
 }
 
 export interface WorkflowFailedInput extends MultiAgentEventFields {
+  agentId?: string | undefined;
+  durationMs?: number | undefined;
   error: Record<string, unknown>;
   goal?: string | undefined;
   metadata?: Record<string, unknown> | undefined;

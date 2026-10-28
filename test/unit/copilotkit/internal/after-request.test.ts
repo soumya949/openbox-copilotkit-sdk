@@ -5,7 +5,6 @@ import {
   type MessageLike
 } from "../../../../src/copilotkit/internal/after-request.js";
 import { attachOpenBoxRuntime } from "../../../../src/copilotkit/runtime-symbol.js";
-import { WorkflowEventType } from "../../../../src/types/workflow-event-type.js";
 import { buildController } from "../test-utils.js";
 
 function buildRuntime() {
@@ -40,7 +39,7 @@ const ASSISTANT_MESSAGE: MessageLike = {
 };
 
 describe("openBoxAfterRequest", () => {
-  it("emits a SIGNAL_RECEIVED event for the final assistant message", async () => {
+  it("sends no governance event for the final assistant message (the answer rides on WorkflowCompleted)", async () => {
     const { evaluateMock, runtime } = buildRuntime();
     const fn = openBoxAfterRequest(runtime);
 
@@ -56,45 +55,21 @@ describe("openBoxAfterRequest", () => {
       runtime
     });
 
-    expect(evaluateMock).toHaveBeenCalledTimes(1);
-    const payload = evaluateMock.mock.calls[0]?.[0] as Record<string, unknown>;
-    expect(payload.event_type).toBe(WorkflowEventType.SIGNAL_RECEIVED);
-    expect(payload.workflow_id).toBe("thread-A");
-    expect(payload.run_id).toBe("run-A");
-    expect(payload.signal_name).toBe("assistant_message");
-    const signalArgs = payload.signal_args as { value: { content: string; id: string } };
-    expect(signalArgs.value.content).toBe("Hello from the assistant");
-    expect(signalArgs.value.id).toBe("msg-final");
+    expect(evaluateMock).not.toHaveBeenCalled();
   });
 
-  it("uses params.threadId as the workflow id (no body peek)", async () => {
-    const { evaluateMock, runtime } = buildRuntime();
-    const fn = openBoxAfterRequest(runtime);
-
-    await fn({
-      ...buildParams({
-        messages: [ASSISTANT_MESSAGE],
-        runId: "run-B",
-        threadId: "thread-explicit"
-      }),
-      runtime
-    });
-
-    expect(evaluateMock.mock.calls[0]?.[0]).toMatchObject({
-      workflow_id: "thread-explicit"
-    });
-  });
-
-  it("walks the messages list in reverse to find the final assistant message", async () => {
-    const { evaluateMock, runtime } = buildRuntime();
-    const fn = openBoxAfterRequest(runtime);
+  it("walks the messages list in reverse to give outputGuardrail the final assistant message", async () => {
+    const { runtime } = buildRuntime();
+    const guardrail = vi.fn().mockResolvedValue({ classification: "allow" });
+    const fn = openBoxAfterRequest(runtime, { outputGuardrail: guardrail });
+    const finalMessage: MessageLike = { content: "Final assistant", id: "msg-f", role: "assistant" };
 
     await fn({
       ...buildParams({
         messages: [
           { content: "Earlier assistant", id: "msg-a", role: "assistant" },
           { content: "User reply", id: "msg-u", role: "user" },
-          { content: "Final assistant", id: "msg-f", role: "assistant" }
+          finalMessage
         ],
         runId: "run-C",
         threadId: "thread-C"
@@ -102,9 +77,7 @@ describe("openBoxAfterRequest", () => {
       runtime
     });
 
-    const payload = evaluateMock.mock.calls[0]?.[0] as Record<string, unknown>;
-    const signalArgs = payload.signal_args as { value: { id: string } };
-    expect(signalArgs.value.id).toBe("msg-f");
+    expect(guardrail).toHaveBeenCalledWith(finalMessage);
   });
 
   it("is a no-op when there is no assistant message in the messages list", async () => {
@@ -250,7 +223,7 @@ describe("openBoxAfterRequest", () => {
 });
 
 describe("openBoxAfterRequest — output dedup (RT-F14)", () => {
-  it("does not emit assistant_message when the run already emitted agent_output via the AG-UI stream", async () => {
+  it("sends nothing when the run already recorded its output via the AG-UI stream", async () => {
     const { controller, evaluateMock } = buildController();
     controller.runTerminalState.markOutputEmitted("run-dedup-1");
     const runtime: Record<string, unknown> = {};
@@ -269,7 +242,7 @@ describe("openBoxAfterRequest — output dedup (RT-F14)", () => {
     expect(evaluateMock).not.toHaveBeenCalled();
   });
 
-  it("does not emit assistant_message when the run ended suspended (interrupt outcome, not finished)", async () => {
+  it("sends nothing when the run ended suspended (interrupt outcome, not finished)", async () => {
     const { controller, evaluateMock } = buildController();
     controller.runTerminalState.markInterrupted("run-dedup-2");
     const runtime: Record<string, unknown> = {};
@@ -288,11 +261,12 @@ describe("openBoxAfterRequest — output dedup (RT-F14)", () => {
     expect(evaluateMock).not.toHaveBeenCalled();
   });
 
-  it("still emits the fallback when RunTerminalState has no entry for the run (stream produced no terminal output)", async () => {
+  it("still runs outputGuardrail when RunTerminalState has no entry for the run, without sending an event", async () => {
     const { controller, evaluateMock } = buildController();
     const runtime: Record<string, unknown> = {};
     attachOpenBoxRuntime(runtime, controller);
-    const fn = openBoxAfterRequest(runtime);
+    const guardrail = vi.fn().mockResolvedValue({ classification: "allow" });
+    const fn = openBoxAfterRequest(runtime, { outputGuardrail: guardrail });
 
     await fn({
       ...buildParams({
@@ -303,7 +277,8 @@ describe("openBoxAfterRequest — output dedup (RT-F14)", () => {
       runtime
     });
 
-    expect(evaluateMock).toHaveBeenCalledTimes(1);
+    expect(guardrail).toHaveBeenCalledWith(ASSISTANT_MESSAGE);
+    expect(evaluateMock).not.toHaveBeenCalled();
   });
 
   it("clears the RunTerminalState entry after reading it (last consumer owns cleanup — bounds memory)", async () => {

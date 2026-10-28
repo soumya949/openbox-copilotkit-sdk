@@ -178,8 +178,7 @@ export class LifecycleTelemetryQueue {
     this.#runChains.set(runId, tail);
     // Self-cleaning: once nothing has extended this run's chain past `tail`,
     // the map entry is stale — bounds the map even for a caller that never
-    // triggers an explicit terminal event or `endRun` (e.g. after-request.ts's
-    // standalone assistant_message signal has no Observable teardown).
+    // triggers an explicit terminal event or `endRun`.
     void tail.then(() => {
       if (this.#runChains.get(runId) === tail) {
         this.#runChains.delete(runId);

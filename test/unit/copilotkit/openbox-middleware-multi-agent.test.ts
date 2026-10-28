@@ -358,7 +358,7 @@ describe("OpenBoxMiddleware multi-agent", () => {
     }
   });
 
-  it("emits array-shaped timeline signals (backend-compatible) when enabled", async () => {
+  it("emits one user_prompt signal with the user's text and puts the answer on WorkflowCompleted when enabled", async () => {
     const { controller, evaluateMock } = buildController();
     const middleware = createOpenBoxMiddleware(controller, {
       multiAgent: { enabled: true, parentAgentDid: PARENT_DID }
@@ -385,14 +385,16 @@ describe("OpenBoxMiddleware multi-agent", () => {
     const signals = payloadsOf(evaluateMock).filter(
       p => p.event_type === WorkflowEventType.SIGNAL_RECEIVED
     );
-    const userInput = signals.find(s => s.signal_name === "user_input");
-    const agentOutput = signals.find(s => s.signal_name === "agent_output");
-    // user message text extracted to element 0 (not a JSON-stringified object)
-    expect(userInput?.signal_args).toEqual(["Hi there"]);
-    expect(agentOutput?.signal_args).toEqual(["Sunny"]);
+    expect(signals).toHaveLength(1);
+    expect(signals[0]?.signal_name).toBe("user_prompt");
+    expect(signals[0]?.signal_args).toEqual(["Hi there"]);
+    const completed = payloadsOf(evaluateMock).find(
+      p => p.event_type === WorkflowEventType.WORKFLOW_COMPLETED
+    );
+    expect(completed?.activity_output).toEqual({ result: "Sunny" });
   });
 
-  it("keeps the legacy { value } signal shape when multi-agent is disabled", async () => {
+  it("uses the same single user_prompt signal shape when multi-agent is disabled", async () => {
     const { controller, evaluateMock } = buildController();
     const middleware = createOpenBoxMiddleware(controller);
     const agent = new ScriptedAgent({
@@ -401,11 +403,12 @@ describe("OpenBoxMiddleware multi-agent", () => {
 
     await collectEvents(middleware.run(buildRunAgentInput(), agent));
 
-    const userInput = payloadsOf(evaluateMock).find(
-      p => p.signal_name === "user_input"
+    const signals = payloadsOf(evaluateMock).filter(
+      p => p.event_type === WorkflowEventType.SIGNAL_RECEIVED
     );
-    expect(Array.isArray(userInput?.signal_args)).toBe(false);
-    expect(userInput?.signal_args).toHaveProperty("value");
+    expect(signals).toHaveLength(1);
+    expect(signals[0]?.signal_name).toBe("user_prompt");
+    expect(signals[0]?.signal_args).toEqual(["Hi there"]);
   });
 
   it("invokes forwardContext with the built context and merges its result into handoff metadata", async () => {

@@ -1,4 +1,3 @@
-import { OpenBoxCopilotKitEmitter } from "../openbox-emitter.js";
 import { getOpenBoxRuntime } from "../runtime-symbol.js";
 import type { OpenBoxRuntimeController } from "../types.js";
 
@@ -53,18 +52,16 @@ export interface OpenBoxAfterRequestOptions {
     | undefined;
 }
 
-const SIGNAL_NAME = "assistant_message";
-
 /**
  * Build a v2-compatible `AfterRequestMiddlewareFn` that:
  *
  *   1. Finds the final assistant message in `params.messages`.
- *   2. Emits a `SIGNAL_RECEIVED` event (signal_name = "assistant_message")
- *      via the OpenBox emitter so the assistant output is recorded in the
- *      governance event stream.
- *   3. Optionally calls `opts.outputGuardrail(message)` and records the
+ *   2. Optionally calls `opts.outputGuardrail(message)` and records the
  *      verdict as metadata. Throwing or block/halt classifications are
  *      logged but do not propagate because this hook runs after streaming.
+ *
+ * It sends no governance event: the run's final answer reaches OpenBox on
+ * `WorkflowCompleted`, and a run's only `SignalReceived` is its prompt.
  *
  * Always returns `void` (matches v2's `AfterRequestMiddlewareFn`). Never
  * throws into the v2 logger path — failures are swallowed after a warn log
@@ -80,8 +77,6 @@ export function openBoxAfterRequest(
     // Runtime is not OpenBox-wrapped, so no-op rather than throw.
     return async () => {};
   }
-
-  const emitter = new OpenBoxCopilotKitEmitter(controller, undefined);
 
   return async (params) => {
     try {
@@ -106,24 +101,16 @@ export function openBoxAfterRequest(
 
       const workflowId = params.threadId;
       if (!workflowId || !runId) {
-        // Without both ids this hook cannot attach the signal to a workflow.
+        // Without both ids the message cannot be tied to a governed run.
         return;
       }
 
-      // Skip emission when the middleware already emitted `agent_output`
-      // (normal successful run — never double-emit `assistant_message`) OR
-      // when the run ended suspended (an interrupt outcome — the run is not
-      // done, so there is no "final" assistant message to report yet).
+      // Skip when the middleware already recorded the run's output (a normal
+      // successful run) OR when the run ended suspended (an interrupt
+      // outcome — the run is not done, so there is no final message yet).
       if (terminalState?.outputEmitted || terminalState?.interrupted) {
         return;
       }
-
-      await emitter.emitSignalReceived({
-        payload: serializeMessage(message),
-        runId,
-        signalName: SIGNAL_NAME,
-        workflowId
-      });
 
       if (!opts.outputGuardrail) {
         return;
@@ -172,18 +159,4 @@ function findFinalAssistantMessage(
     }
   }
   return undefined;
-}
-
-function serializeMessage(message: MessageLike): Record<string, unknown> {
-  return {
-    ...(message.content !== undefined ? { content: message.content } : {}),
-    id: message.id,
-    role: message.role,
-    ...(message.toolCallId !== undefined
-      ? { tool_call_id: message.toolCallId }
-      : {}),
-    ...(message.toolCalls !== undefined
-      ? { tool_calls: message.toolCalls }
-      : {})
-  };
 }

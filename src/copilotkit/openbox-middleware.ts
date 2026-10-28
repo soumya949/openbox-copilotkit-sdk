@@ -38,11 +38,10 @@ import { CopilotKitGovernanceControlError } from "./governance-control-error.js"
 import { DEFAULT_INTERRUPT_TTL_MS, type PendingInterrupt } from "./internal/interrupt-store.js";
 import type { ActivityStartedInput } from "./lifecycle-events.js";
 import {
-  AGENT_OUTPUT_SIGNAL_NAME,
   COPILOTKIT_TASK_QUEUE,
   COPILOTKIT_WORKFLOW_TYPE,
   OpenBoxCopilotKitEmitter,
-  USER_INPUT_SIGNAL_NAME
+  USER_PROMPT_SIGNAL_NAME
 } from "./openbox-emitter.js";
 import {
   parseResumeEntries,
@@ -99,6 +98,8 @@ interface ToolCallBufferEntry {
 }
 
 interface PerRunState {
+  // The CopilotKit agent the run belongs to; titles the run's own rows.
+  agentId: string | undefined;
   // Dedup keys for already-emitted handoffs:
   // `${multiAgentSessionId}::${fromAgentDid}::${childAgentName}::${parentActivityId}`.
   emittedHandoffs: Set<string>;
@@ -226,7 +227,8 @@ export class OpenBoxMiddleware extends Middleware {
         toolCallBuffer: new Map(),
         userInput: extractLastUserMessage(input.messages),
         workflowId: input.threadId,
-        workflowStarted: false
+        workflowStarted: false,
+        agentId: undefined
       };
 
       let blocked = false;
@@ -383,6 +385,7 @@ export class OpenBoxMiddleware extends Middleware {
       case EventType.RUN_STARTED: {
         if (!state.workflowStarted) {
           state.workflowStarted = true;
+          state.agentId = agentId;
           await this.#emitter.emitWorkflowStarted({
             agentId,
             goal,
@@ -393,18 +396,14 @@ export class OpenBoxMiddleware extends Middleware {
             userInput: state.userInput,
             workflowId: state.workflowId
           });
+          // The run's one SignalReceived: the user's prompt as text.
           await this.#emitter.emitSignalReceived({
             goal,
             metadata,
             multiAgentSessionId: state.multiAgentSessionId,
-            // In multi-agent mode the signal is array-shaped for the OpenBox
-            // timeline; pass the user's text so element 0 renders cleanly
-            // instead of a JSON-stringified message object.
-            payload: state.multiAgentSessionId
-              ? extractUserText(state.userInput)
-              : state.userInput,
+            payload: extractUserText(state.userInput),
             runId: state.runId,
-            signalName: USER_INPUT_SIGNAL_NAME,
+            signalName: USER_PROMPT_SIGNAL_NAME,
             workflowId: state.workflowId
           });
         }
@@ -565,6 +564,8 @@ export class OpenBoxMiddleware extends Middleware {
           return blockResult;
         }
         await this.#emitter.emitWorkflowFailed({
+          agentId: state.agentId,
+          durationMs: Math.max(0, Date.now() - state.startTime),
           error,
           goal,
           metadata,
@@ -639,17 +640,9 @@ export class OpenBoxMiddleware extends Middleware {
     if (blockResult) {
       return blockResult;
     }
-    await this.#emitter.emitSignalReceived({
-      goal,
-      metadata,
-      multiAgentSessionId: state.multiAgentSessionId,
-      payload: state.outputText,
-      runId: state.runId,
-      signalName: AGENT_OUTPUT_SIGNAL_NAME,
-      workflowId: state.workflowId
-    });
     this.#runtime.runTerminalState.markOutputEmitted(state.runId);
     await this.#emitter.emitWorkflowCompleted({
+      agentId: state.agentId ?? agentId,
       agentOutput: state.outputText,
       durationMs: Math.max(0, endTime - state.startTime),
       endTime,
@@ -747,6 +740,8 @@ export class OpenBoxMiddleware extends Middleware {
       const pending = this.#runtime.interruptStore.take(originalRunId, entry.interruptId);
       if (!pending) {
         await this.#emitter.emitWorkflowFailed({
+          agentId: state.agentId,
+          durationMs: Math.max(0, Date.now() - state.startTime),
           error: {
             message: `Resume references an unknown or expired interrupt id: ${entry.interruptId}`,
             name: "OpenBoxInterruptResumeCorrelationError"
@@ -1169,6 +1164,8 @@ export class OpenBoxMiddleware extends Middleware {
       status: "failed"
     });
     await this.#emitter.emitWorkflowFailed({
+      agentId: state.agentId,
+      durationMs: Math.max(0, Date.now() - state.startTime),
       error,
       goal: context?.goal,
       metadata: context?.metadata,

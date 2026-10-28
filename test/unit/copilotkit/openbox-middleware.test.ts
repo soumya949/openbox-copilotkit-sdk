@@ -72,7 +72,7 @@ const scriptedToolCallEventsWithResult: BaseEvent[] = [
 ];
 
 describe("OpenBoxMiddleware.run", () => {
-  it("emits WorkflowStarted, user_input signal, agent_output signal, and WorkflowCompleted for a text-only run", async () => {
+  it("emits WorkflowStarted, one user_prompt signal and WorkflowCompleted (carrying the answer) for a text-only run", async () => {
     const { controller, evaluateMock } = buildController();
     const middleware = createOpenBoxMiddleware(controller);
     const agent = new ScriptedAgent({ events: scriptedTextEvents });
@@ -87,7 +87,6 @@ describe("OpenBoxMiddleware.run", () => {
 
     expect(calls.map(c => c.event_type)).toEqual([
       WorkflowEventType.WORKFLOW_STARTED,
-      WorkflowEventType.SIGNAL_RECEIVED,
       WorkflowEventType.SIGNAL_RECEIVED,
       WorkflowEventType.WORKFLOW_COMPLETED
     ]);
@@ -108,7 +107,23 @@ describe("OpenBoxMiddleware.run", () => {
       EventType.RUN_FINISHED
     ]);
 
-    const completed = calls[3]!;
+    const [started, signal, completed] = calls as [
+      Record<string, unknown>,
+      Record<string, unknown>,
+      Record<string, unknown>
+    ];
+    // The run's own rows share run_id-wf and are titled with the agent id.
+    expect(started.activity_id).toBe("run-1-wf");
+    expect(started.activity_type).toBe("test-agent");
+    expect(completed.activity_id).toBe("run-1-wf");
+    expect(completed.activity_type).toBe("test-agent");
+    // The prompt signal: user_prompt, run_id-sig, [text].
+    expect(signal.signal_name).toBe("user_prompt");
+    expect(signal.activity_id).toBe("run-1-sig");
+    expect(signal.activity_type).toBe("user_prompt");
+    expect(signal.signal_args).toEqual(["Hi there"]);
+    // The answer rides on WorkflowCompleted, under the key Core stores.
+    expect(completed.activity_output).toEqual({ result: "Hello world" });
     expect(completed.workflow_output).toBe("Hello world");
   });
 

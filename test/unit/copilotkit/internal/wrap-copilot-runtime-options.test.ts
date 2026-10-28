@@ -190,19 +190,18 @@ describe("wrapCopilotRuntimeOptions — middleware composition (happy path)", ()
       calls.push("user");
     });
 
+    const outputGuardrail = vi.fn(async () => {
+      calls.push("openbox");
+      return { classification: "allow" };
+    });
     const { options: next, controller, shutdown } = await wrapCopilotRuntimeOptions(
       { agents: { a: new FakeAgent("a") }, afterRequestMiddleware: userAfter },
-      CONFIG
+      CONFIG,
+      { afterRequest: { outputGuardrail } }
     );
 
     const runtime: Record<string, unknown> = {};
     attachOpenBoxRuntime(runtime, controller);
-    const evaluateMock = vi.fn(async () => {
-      calls.push("openbox");
-      return null;
-    });
-    (controller.runtime.client as unknown as { evaluate: typeof evaluateMock }).evaluate =
-      evaluateMock;
 
     const wrappedAfter = next.afterRequestMiddleware!;
     await wrappedAfter({

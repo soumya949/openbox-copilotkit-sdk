@@ -41,8 +41,7 @@ import type {
 
 export { COPILOTKIT_TASK_QUEUE, COPILOTKIT_WORKFLOW_TYPE };
 
-export const USER_INPUT_SIGNAL_NAME = "user_input";
-export const AGENT_OUTPUT_SIGNAL_NAME = "agent_output";
+export { USER_PROMPT_SIGNAL_NAME } from "./lifecycle-events.js";
 
 /**
  * Carrier for a synthesized `function_call` span. It is emitted as a separate

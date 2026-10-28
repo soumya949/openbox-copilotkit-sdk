@@ -8,7 +8,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { wrapCopilotRuntimeOptions } from "../../../../src/copilotkit/internal/wrap-copilot-runtime-options.js";
 import { attachOpenBoxRuntime } from "../../../../src/copilotkit/runtime-symbol.js";
-import { WorkflowEventType } from "../../../../src/types/workflow-event-type.js";
 
 class FakeAgent extends AbstractAgent {
   public override run(): Observable<BaseEvent> {
@@ -84,20 +83,18 @@ describe("middleware composition — try/finally semantics", () => {
     await shutdown();
   });
 
-  it("user afterRequestMiddleware throws — OpenBox still emits the assistant_message signal and the user error re-propagates", async () => {
+  it("user afterRequestMiddleware throws — OpenBox's after hook still runs and the user error re-propagates", async () => {
     const userErr = new Error("user-after-boom");
     const userAfter = vi.fn(async () => {
       throw userErr;
     });
+    const outputGuardrail = vi.fn(async () => ({ classification: "allow" }));
 
     const { options, controller, shutdown } = await wrapCopilotRuntimeOptions(
       { agents: { a: new FakeAgent() }, afterRequestMiddleware: userAfter },
-      CONFIG
+      CONFIG,
+      { afterRequest: { outputGuardrail } }
     );
-
-    const evaluateMock = vi.fn(async (_payload: Record<string, unknown>) => null);
-    (controller.runtime.client as unknown as { evaluate: typeof evaluateMock }).evaluate =
-      evaluateMock;
 
     const runtime = buildRuntime(controller);
     const wrapped = options.afterRequestMiddleware!;
@@ -114,10 +111,7 @@ describe("middleware composition — try/finally semantics", () => {
       } as Parameters<typeof wrapped>[0])
     ).rejects.toBe(userErr);
 
-    const eventTypes = evaluateMock.mock.calls.map(
-      c => (c[0] as Record<string, unknown>).event_type
-    );
-    expect(eventTypes).toContain(WorkflowEventType.SIGNAL_RECEIVED);
+    expect(outputGuardrail).toHaveBeenCalledTimes(1);
 
     await shutdown();
   });
@@ -156,14 +150,12 @@ describe("middleware composition — try/finally semantics", () => {
   });
 
   it("no user middleware supplied — OpenBox before/after still run", async () => {
+    const outputGuardrail = vi.fn(async () => ({ classification: "allow" }));
     const { options, controller, shutdown } = await wrapCopilotRuntimeOptions(
       { agents: { a: new FakeAgent() } },
-      CONFIG
+      CONFIG,
+      { afterRequest: { outputGuardrail } }
     );
-
-    const evaluateMock = vi.fn(async (_payload: Record<string, unknown>) => null);
-    (controller.runtime.client as unknown as { evaluate: typeof evaluateMock }).evaluate =
-      evaluateMock;
 
     const runtime = buildRuntime(controller);
     const before = options.beforeRequestMiddleware!;
@@ -183,10 +175,7 @@ describe("middleware composition — try/finally semantics", () => {
       threadId: "thread-1"
     } as Parameters<typeof after>[0]);
 
-    const eventTypes = evaluateMock.mock.calls.map(
-      c => (c[0] as Record<string, unknown>).event_type
-    );
-    expect(eventTypes).toContain(WorkflowEventType.SIGNAL_RECEIVED);
+    expect(outputGuardrail).toHaveBeenCalledTimes(1);
 
     await shutdown();
   });

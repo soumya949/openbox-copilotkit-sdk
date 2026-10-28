@@ -54,6 +54,17 @@ export const COPILOTKIT_TASK_QUEUE = "copilotkit";
 export const COPILOTKIT_EVENT_SOURCE = "copilotkit-middleware";
 /** Fires once when `RUN_FINISHED.outcome.type === "interrupt"` (fixes B3). */
 export const COPILOTKIT_INTERRUPT_SIGNAL_NAME = "copilotkit_interrupt";
+/** The run's one prompt signal, named as in every OpenBox SDK. */
+export const USER_PROMPT_SIGNAL_NAME = "user_prompt";
+
+/**
+ * The run's own activity, shared by `WorkflowStarted`/`WorkflowCompleted`/
+ * `WorkflowFailed` as in every OpenBox SDK. Core titles a row by its
+ * activity_type, so the agent heads the run's open and close rows.
+ */
+function workflowActivity(runId: string, agentId: string | undefined): Record<string, string> {
+  return { activity_id: `${runId}-wf`, activity_type: agentId ?? COPILOTKIT_WORKFLOW_TYPE };
+}
 
 /** `WorkflowStarted`: ids/type/queue/multi-agent are base-native; the rest rides in `extra`. */
 export function buildWorkflowStartedEnvelope(
@@ -67,6 +78,7 @@ export function buildWorkflowStartedEnvelope(
     ...multiAgentSessionIdOption(input.multiAgentSessionId),
     extra: {
       source: COPILOTKIT_EVENT_SOURCE,
+      ...workflowActivity(input.runId, input.agentId),
       thread_id: input.threadId,
       workflow_input: serializeOrNull(input.userInput),
       ...(input.goal ? { goal: input.goal } : {}),
@@ -77,8 +89,14 @@ export function buildWorkflowStartedEnvelope(
   });
 }
 
-/** `SignalReceived`: `signal_args` shape mirrors multi-agent vs standalone mode. */
+/**
+ * `SignalReceived`. The run's prompt signal is `user_prompt` with
+ * activity_id `<run_id>-sig` (which also keys an approval of the prompt) and
+ * `signal_args: [text]`, as in every OpenBox SDK; other signals keep the
+ * mode-dependent `signal_args` shape.
+ */
 export function buildSignalReceivedEnvelope(input: SignalEmitInput): EventEnvelope {
+  const prompt = input.signalName === USER_PROMPT_SIGNAL_NAME;
   return signalReceived({
     workflowId: input.workflowId,
     runId: input.runId,
@@ -88,10 +106,10 @@ export function buildSignalReceivedEnvelope(input: SignalEmitInput): EventEnvelo
     signalName: input.signalName,
     extra: {
       source: COPILOTKIT_EVENT_SOURCE,
-      signal_args: serializeSignalArgs(
-        input.payload,
-        Boolean(input.multiAgentSessionId)
-      ),
+      ...(prompt ? { activity_id: `${input.runId}-sig`, activity_type: USER_PROMPT_SIGNAL_NAME } : {}),
+      signal_args: prompt
+        ? [serializeOrNull(input.payload)]
+        : serializeSignalArgs(input.payload, Boolean(input.multiAgentSessionId)),
       ...(input.goal ? { goal: input.goal } : {}),
       ...metadataExtra(input.metadata)
     }
@@ -189,7 +207,10 @@ export function buildActivityCompletedEnvelope(
   });
 }
 
-/** `WorkflowCompleted`: `workflow_output` has no base-native slot, so it rides in `extra`. */
+/**
+ * `WorkflowCompleted`: the final answer rides as `activity_output` (the key
+ * Core stores for every event type) and as `workflow_output`.
+ */
 export function buildWorkflowCompletedEnvelope(
   input: WorkflowCompletedInput
 ): EventEnvelope {
@@ -201,6 +222,8 @@ export function buildWorkflowCompletedEnvelope(
     ...multiAgentSessionIdOption(input.multiAgentSessionId),
     extra: {
       source: COPILOTKIT_EVENT_SOURCE,
+      ...workflowActivity(input.runId, input.agentId),
+      activity_output: { result: serializeOrNull(input.agentOutput) },
       workflow_output: serializeOrNull(input.agentOutput),
       ...(typeof input.durationMs === "number"
         ? { duration_ms: input.durationMs }
@@ -227,6 +250,9 @@ export function buildWorkflowFailedEnvelope(input: WorkflowFailedInput): EventEn
     error: toErrorInfo(input.error),
     extra: {
       source: COPILOTKIT_EVENT_SOURCE,
+      ...workflowActivity(input.runId, input.agentId),
+      status: "failed",
+      ...(typeof input.durationMs === "number" ? { duration_ms: input.durationMs } : {}),
       ...(input.goal ? { goal: input.goal } : {}),
       ...metadataExtra(input.metadata),
       ...parentWorkflowIdExtra(input)
