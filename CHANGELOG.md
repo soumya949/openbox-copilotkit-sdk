@@ -2,7 +2,31 @@
 
 ## Unreleased
 
-- No changes yet.
+Adopts `@openbox-ai/openbox-sdk-ts` 2.1.0 (v3 workload identity) and aligns the event sequence with the other OpenBox SDKs.
+
+### Added
+
+- v3 Keycloak workload identity: `workloadPrivateKey` and `identityMethod` in the config input (also read from `OPENBOX_COPILOTKIT_*` / `OPENBOX_*` env vars), alongside the v2 Okta and v1 DID identities.
+- OpenRouter provenance: every OpenRouter model call in a governed run is reported as an `llm_call` activity with HTTP spans and an `llm_provenance` span (generation id, upstream provider, model, tokens, cost) from OpenRouter's generation record. On by default; set `OPENBOX_OPENROUTER_PROVENANCE=false` to turn it off.
+- `InterruptPersistencePort.hasPending?` (implemented by `InMemoryInterruptStore`).
+- `telemetry` option on `createOpenBoxCopilotKit`.
+
+### Changed
+
+- Requires `@openbox-ai/openbox-sdk-ts` >= 2.1.0 < 3.0.0.
+- One `SignalReceived` per run (`user_prompt`, the user's text); the after-request `assistant_message` signal is gone.
+- `WorkflowStarted`/`WorkflowCompleted`/`WorkflowFailed` use `<run>-wf` activity ids with the agent as activity type, so the dashboard tree shows the agent name and the `user_prompt` row.
+- `WorkflowCompleted` carries the answer as `activity_output.result`; failed runs close with `WorkflowFailed` and a duration.
+- `withRuntime` shares the bundle's controller instead of building a second one.
+- Default telemetry `flushTimeoutMs` is 30 s, so a run's closing events are not dropped on shutdown.
+
+### Fixed
+
+- Approval decisions are accepted only for the approval the run is waiting on (guards against Core returning an older approval's decision for the same activity).
+- A tool call refused by the enforcing gate now closes its run.
+- Events sent directly (gate, `serverTool`, handoff) wait for the run's queued events, so Core receives them in order.
+- An interrupted run is closed with `WorkflowCompleted` once its last interrupt is resolved.
+- An oversized hook `spans` field is trimmed in place instead of being replaced by a truncation marker (Core rejected the marker with 400).
 
 ## 0.4.0 — 2026-07-17
 
