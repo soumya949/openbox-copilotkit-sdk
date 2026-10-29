@@ -42,6 +42,8 @@ const ATTEMPT_TIMEOUT_MS = 4_000;
 const MAX_CAPTURED_BODY_CHARS = 2_000_000;
 /** How long an llm_call report waits for its run's WorkflowStarted. */
 const START_WAIT_MS = 5_000;
+/** How long the next activity waits for a run's earlier llm_calls to close. */
+const SETTLE_TIMEOUT_MS = 5_000;
 const GENERATION_ID = /"id"\s*:\s*"(gen-[^"]+)"/;
 
 export interface ProviderAttempt {
@@ -435,7 +437,22 @@ interface Registration {
   controller: OpenBoxRuntimeController;
   emitter: OpenBoxCopilotKitEmitter;
   pending: Map<string, Set<Promise<void>>>;
+  /** Each run's llm_call closes (ActivityCompleted) not yet queued. */
+  closing: Map<string, Set<Promise<void>>>;
   started: Map<string, { promise: Promise<void>; resolve: () => void }>;
+}
+
+/** Wait (bounded) for `closes` — the llm_calls a later activity must follow. */
+function settle(closes: Promise<void>[]): Promise<void> {
+  if (closes.length === 0) return Promise.resolve();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<void>(done => {
+    timer = setTimeout(done, SETTLE_TIMEOUT_MS);
+    timer.unref?.();
+  });
+  return Promise.race([Promise.allSettled(closes).then(() => undefined), timeout]).finally(() => {
+    clearTimeout(timer);
+  });
 }
 
 /** The run's start gate, opened by `markRunStarted` once WorkflowStarted is queued. */
@@ -517,8 +534,11 @@ async function governedOpenRouterFetch(
   const report = { activityId, activityType: LLM_ACTIVITY_TYPE, runId, workflowId };
 
   // The model call can fire before the middleware handles RUN_STARTED; the
-  // reports wait for the run's WorkflowStarted (the call itself never waits).
-  const reported = whenRunStarted(registration, runId).then(() => {
+  // reports wait for the run's WorkflowStarted and for the run's earlier
+  // llm_calls to close (the call itself never waits).
+  const earlierCloses = [...(registration.closing.get(runId) ?? [])];
+  const reported = whenRunStarted(registration, runId).then(async () => {
+    await settle(earlierCloses);
     void emitter.emitActivityStarted({
       activityArgs: { model: requestedModel, messages: Array.isArray(messages) ? messages.length : null },
       activityId,
@@ -550,16 +570,17 @@ async function governedOpenRouterFetch(
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const endNs = nowNs();
-    track(
+    const durationMs = Math.max(0, Date.now() - startedAt);
+    trackClose(
       registration,
       runId,
       reported.then(() => {
-        finishLlmCall(registration, report, {
+        closeLlmCall(registration, report, {
+          durationMs,
           endNs,
           error: message,
           httpSpan: { httpFields, httpSpanId, method, startNs, traceId, url },
           provenance: null,
-          startedAt,
           statusCode: null
         });
       })
@@ -582,7 +603,10 @@ async function governedOpenRouterFetch(
   const headerGenerationId = response.headers.get("x-generation-id");
   const apiKey = bearerKey(input, init);
 
-  const work = (async () => {
+  // The activity closes as soon as the response is read, from what the
+  // response itself reports; OpenRouter's generation record (seconds later)
+  // follows as the provenance span, as in the reference SDK.
+  const closed = (async () => {
     let text = "";
     try {
       text = await captured;
@@ -592,35 +616,50 @@ async function governedOpenRouterFetch(
     const endedAt = Date.now();
     const endNs = nowNs();
     const generationId = asString(headerGenerationId) ?? extractGenerationId(text);
-    let provenance: RoutingProvenance | null = null;
-    if (generationId) {
-      const fromResponse = recordFromResponse(generationId, text, requested, requestedModel);
-      const fromRecord = apiKey
-        ? await fetchGenerationRecord(realFetch, generationId, apiKey, endedAt + LOOKUP_BUDGET_MS, requested, requestedModel)
-        : null;
-      provenance = fromRecord ?? fromResponse;
-    }
+    const fromResponse = generationId ? recordFromResponse(generationId, text, requested, requestedModel) : null;
     await reported;
-    finishLlmCall(registration, report, {
+    closeLlmCall(registration, report, {
+      durationMs: Math.max(0, endedAt - startedAt),
       endNs,
       error: response.ok ? null : `HTTP ${response.status}`,
       httpSpan: { httpFields, httpSpanId, method, startNs, traceId, url },
-      provenance,
+      provenance: fromResponse,
       responseText: text,
-      startedAt,
       statusCode: response.status
     });
-  })().catch((err: unknown) => {
-    registration.controller.logger.warn?.({ err, note: "openbox openrouter provenance failed — skipped" });
-  });
+    return { endNs, endedAt, fromResponse, generationId };
+  })();
+  trackClose(
+    registration,
+    runId,
+    closed.then(
+      () => undefined,
+      () => undefined
+    )
+  );
+
+  const work = closed
+    .then(async ({ endNs, endedAt, fromResponse, generationId }) => {
+      if (!generationId) return;
+      const fromRecord = apiKey
+        ? await fetchGenerationRecord(realFetch, generationId, apiKey, endedAt + LOOKUP_BUDGET_MS, requested, requestedModel)
+        : null;
+      const record = fromRecord ?? fromResponse;
+      if (record) reportProvenance(registration, report, record, endNs, traceId);
+    })
+    .catch((err: unknown) => {
+      registration.controller.logger.warn?.({ err, note: "openbox openrouter provenance failed — skipped" });
+    });
   track(registration, runId, work);
   return callerResponse;
 }
 
-function finishLlmCall(
+/** HTTP completed span + ActivityCompleted of one llm_call. */
+function closeLlmCall(
   registration: Registration,
   report: { activityId: string; activityType: string; runId: string; workflowId: string },
   outcome: {
+    durationMs: number;
     endNs: number;
     error: string | null;
     httpSpan: {
@@ -633,13 +672,11 @@ function finishLlmCall(
     };
     provenance: RoutingProvenance | null;
     responseText?: string;
-    startedAt: number;
     statusCode: number | null;
   }
 ): void {
   const { emitter } = registration;
   const { endNs, httpSpan } = outcome;
-  // One span per hook payload: the HTTP completion, then the provenance.
   emitter.emitHookSpans(report, [
     span({
       attributes: {
@@ -663,28 +700,6 @@ function finishLlmCall(
       traceId: httpSpan.traceId
     })
   ]);
-  const record = outcome.provenance;
-  if (record) {
-    // As in the reference SDK: OpenRouter's record of who served the call.
-    emitter.emitHookSpans(report, [
-      {
-        ...span({
-          attributes: provenanceAttributes(record),
-          endNs,
-          hookType: "llm_provenance",
-          name: `served by ${record.provider ?? "an unreported provider"}${record.model !== null ? ` (${record.model})` : ""}`,
-          spanId: hexId(8),
-          stage: "completed",
-          startNs: endNs,
-          traceId: httpSpan.traceId
-        }),
-        activity_id: report.activityId,
-        duration_ns: record.latencyMs !== null ? record.latencyMs * 1_000_000 : null,
-        gen_ai_system: record.provider ?? "openrouter",
-        semantic_type: "llm_provenance"
-      }
-    ]);
-  }
 
   const p = outcome.provenance;
   void emitter.emitActivityCompleted({
@@ -699,13 +714,59 @@ function finishLlmCall(
           total_cost: p.totalCost
         }
       : null,
-    durationMs: Math.max(0, Date.now() - outcome.startedAt),
+    durationMs: outcome.durationMs,
     ...(outcome.error !== null ? { error: { message: outcome.error, name: "OpenRouterCallFailed" } } : {}),
     runId: report.runId,
     status: outcome.error === null ? "completed" : "failed",
     toolName: report.activityType,
     workflowId: report.workflowId
   });
+}
+
+/**
+ * OpenRouter's record of who served the call, sent on the closed activity
+ * once it arrives (as in the reference SDK). One span per hook payload.
+ */
+function reportProvenance(
+  registration: Registration,
+  report: { activityId: string; activityType: string; runId: string; workflowId: string },
+  record: RoutingProvenance,
+  endNs: number,
+  traceId: string
+): void {
+  registration.emitter.emitHookSpans(report, [
+    {
+      ...span({
+        attributes: provenanceAttributes(record),
+        endNs,
+        hookType: "llm_provenance",
+        name: `served by ${record.provider ?? "an unreported provider"}${record.model !== null ? ` (${record.model})` : ""}`,
+        spanId: hexId(8),
+        stage: "completed",
+        startNs: endNs,
+        traceId
+      }),
+      activity_id: report.activityId,
+      duration_ns: record.latencyMs !== null ? record.latencyMs * 1_000_000 : null,
+      gen_ai_system: record.provider ?? "openrouter",
+      semantic_type: "llm_provenance"
+    }
+  ]);
+}
+
+/** Track an llm_call close: later activities of the run follow it. */
+function trackClose(registration: Registration, runId: string, close: Promise<void>): void {
+  let set = registration.closing.get(runId);
+  if (!set) {
+    set = new Set();
+    registration.closing.set(runId, set);
+  }
+  set.add(close);
+  void close.finally(() => {
+    set.delete(close);
+    if (set.size === 0) registration.closing.delete(runId);
+  });
+  track(registration, runId, close);
 }
 
 function track(registration: Registration, runId: string, work: Promise<void>): void {
@@ -729,13 +790,20 @@ export function attachOpenRouterProvenance(controller: OpenBoxRuntimeController)
   detach: () => void;
   drainRun: (runId: string) => Promise<void>;
   markRunStarted: (runId: string) => void;
+  settleRun: (runId: string) => Promise<void>;
 } {
   if (!openRouterProvenanceEnabled()) {
-    return { detach: () => undefined, drainRun: () => Promise.resolve(), markRunStarted: () => undefined };
+    return {
+      detach: () => undefined,
+      drainRun: () => Promise.resolve(),
+      markRunStarted: () => undefined,
+      settleRun: () => Promise.resolve()
+    };
   }
   const registration: Registration = {
     controller,
     emitter: new OpenBoxCopilotKitEmitter(controller, undefined),
+    closing: new Map(),
     pending: new Map(),
     started: new Map()
   };
@@ -771,6 +839,7 @@ export function attachOpenRouterProvenance(controller: OpenBoxRuntimeController)
     },
     markRunStarted: runId => {
       runStartGate(registration, runId).resolve();
-    }
+    },
+    settleRun: runId => settle([...(registration.closing.get(runId) ?? [])])
   };
 }

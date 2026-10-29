@@ -239,7 +239,9 @@ export function serverTool<T>(
 
         let evalResult: EvaluationResult;
         try {
-          // The run's queued events (WorkflowStarted, the prompt) reach Core first.
+          // The run's queued events (WorkflowStarted, the prompt, the model
+          // call that chose this tool) reach Core first.
+          await controller.openRouterProvenance?.settleRun?.(runId);
           await controller.telemetryQueue.drainRun(runId);
           evalResult = await controller.runtime.evaluateLifecycle(envelope);
         } catch (err) {

@@ -122,8 +122,8 @@ describe("attachOpenRouterProvenance", () => {
       ["ActivityStarted", false],
       ["ActivityStarted", true],
       ["ActivityStarted", true],
-      ["ActivityStarted", true],
-      ["ActivityCompleted", false]
+      ["ActivityCompleted", false],
+      ["ActivityStarted", true]
     ]);
     for (const payload of sent) {
       expect(payload).toMatchObject({ activity_type: "llm_call", run_id: "run-1", workflow_id: "thread-1" });
@@ -131,9 +131,9 @@ describe("attachOpenRouterProvenance", () => {
     const started = (sent[1]!.spans as Record<string, unknown>[])[0]!;
     expect(started).toMatchObject({ end_time: null, hook_type: "http_request", stage: "started" });
     // Core takes one span per hook payload.
-    expect(sent.slice(1, 4).map(p => (p.spans as unknown[]).length)).toEqual([1, 1, 1]);
+    expect([sent[1], sent[2], sent[4]].map(p => (p!.spans as unknown[]).length)).toEqual([1, 1, 1]);
     const httpCompleted = (sent[2]!.spans as Record<string, unknown>[])[0]!;
-    const provenanceSpan = (sent[3]!.spans as Record<string, unknown>[])[0]!;
+    const provenanceSpan = (sent[4]!.spans as Record<string, unknown>[])[0]!;
     expect(httpCompleted).toMatchObject({ hook_type: "http_request", http_status_code: 200, stage: "completed" });
     expect(provenanceSpan).toMatchObject({
       activity_id: sent[0]!.activity_id,
@@ -151,7 +151,8 @@ describe("attachOpenRouterProvenance", () => {
       "gen_ai.usage.tokens_prompt": 40,
       "openbox.model.honored": true
     });
-    expect(sent[4]).toMatchObject({
+    // Closed from the response itself, before the generation record arrives.
+    expect(sent[3]).toMatchObject({
       activity_output: { generation_id: "gen-123", model: "openai/gpt-4o-mini", provider: "OpenAI" },
       status: "completed"
     });
@@ -178,9 +179,48 @@ describe("attachOpenRouterProvenance", () => {
       "ActivityStarted",
       "ActivityStarted",
       "ActivityStarted",
-      "ActivityStarted",
-      "ActivityCompleted"
+      "ActivityCompleted",
+      "ActivityStarted"
     ]);
+  });
+
+  it("closes the llm_call without waiting for the generation record", async () => {
+    let releaseRecord: () => void = () => undefined;
+    const recordReady = new Promise<void>(done => {
+      releaseRecord = done;
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) => {
+        const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        if (url.startsWith("https://openrouter.ai/api/v1/generation")) {
+          await recordReady;
+          return json(GENERATION_RECORD);
+        }
+        return json(COMPLETION, { "x-generation-id": "gen-123" });
+      })
+    );
+    const { controller, evaluateMock } = buildController();
+    const provenance = attachOpenRouterProvenance(controller);
+    provenance.markRunStarted("run-1");
+
+    const response = await controller.runContext.enterRunContext({ runId: "run-1", workflowId: "thread-1" }, () =>
+      fetch("https://openrouter.ai/api/v1/chat/completions", REQUEST_INIT)
+    );
+    await response.json();
+    // What the next activity waits for: this call's close, not its provenance.
+    await provenance.settleRun("run-1");
+    await controller.telemetryQueue.flush();
+    const beforeRecord = evaluateMock.mock.calls.map(call => (call[0] as Record<string, unknown>).event_type);
+    expect(beforeRecord.at(-1)).toBe("ActivityCompleted");
+
+    releaseRecord();
+    await provenance.drainRun("run-1");
+    await controller.telemetryQueue.flush();
+    provenance.detach();
+
+    const last = evaluateMock.mock.calls.at(-1)![0] as Record<string, unknown>;
+    expect((last.spans as Record<string, unknown>[])[0]).toMatchObject({ hook_type: "llm_provenance" });
   });
 
   it("does not report OpenRouter calls made outside a governed run", async () => {

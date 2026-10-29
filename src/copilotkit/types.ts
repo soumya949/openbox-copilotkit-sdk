@@ -68,10 +68,15 @@ export interface OpenBoxRuntimeController {
    * Reports OpenRouter model calls made during this controller's runs (see
    * `internal/openrouter-provenance.ts`). A run's closing event waits for the
    * run's pending provenance via `drainRun`; its reports wait for
-   * `markRunStarted` so they follow the run's WorkflowStarted.
+   * `markRunStarted` so they follow the run's WorkflowStarted, and a run's
+   * next activity waits for `settleRun` so each llm_call closes before it.
    */
   openRouterProvenance?:
-    | { drainRun: (runId: string) => Promise<void>; markRunStarted?: (runId: string) => void }
+    | {
+        drainRun: (runId: string) => Promise<void>;
+        markRunStarted?: (runId: string) => void;
+        settleRun?: (runId: string) => Promise<void>;
+      }
     | undefined;
 }
 

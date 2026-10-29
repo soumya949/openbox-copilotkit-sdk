@@ -917,6 +917,9 @@ export class OpenBoxMiddleware extends Middleware {
       return undefined;
     }
 
+    // The model call that chose this tool closes before the tool starts.
+    await this.#runtime.openRouterProvenance?.settleRun?.(state.runId);
+
     // RT-F15 duplicate-suppression: a wrapped server tool
     // (`bundle.serverTool()`) already claimed `(runId, toolCallId)` ownership
     // and emitted its OWN ActivityStarted/Completed for this call (Phase 5).
