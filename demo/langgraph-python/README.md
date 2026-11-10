@@ -77,7 +77,7 @@ The demo has two independent OpenBox integration boundaries:
 
 The Python graph is exposed as a generic AG-UI endpoint by `serve.py`, and the CopilotKit runtime connects to it with `HttpAgent`. A small graph proxy delegates state and schema operations to the original compiled graph while routing `ainvoke`, `astream`, and `astream_events` through the OpenBox handler.
 
-Both wrappers are opt-in. The CopilotKit wrapper requires `OPENBOX_COPILOTKIT_API_KEY` and an OpenBox URL; the Python wrapper requires `OPENBOX_LANGGRAPH_API_KEY` and an OpenBox URL. Each also falls back to the shared `OPENBOX_API_KEY`, `OPENBOX_AGENT_DID`, and `OPENBOX_AGENT_PRIVATE_KEY` variables for simple single-agent testing.
+Both wrappers are opt-in. The CopilotKit wrapper requires `OPENBOX_COPILOTKIT_API_KEY` and an OpenBox URL; the Python wrapper requires `OPENBOX_LANGGRAPH_API_KEY` and an OpenBox URL. Give each its agent's workload private key (`OPENBOX_COPILOTKIT_WORKLOAD_PRIVATE_KEY`, `OPENBOX_LANGGRAPH_WORKLOAD_PRIVATE_KEY`): the PEM shown when you create the agent (IAM v3 workload identity), kept inside double quotes in `.env`. Agents registered with a DID use the `*_AGENT_DID` / `*_AGENT_PRIVATE_KEY` variables instead. Each also falls back to the shared `OPENBOX_API_KEY` and `OPENBOX_WORKLOAD_PRIVATE_KEY` (or `OPENBOX_AGENT_DID` and `OPENBOX_AGENT_PRIVATE_KEY`) variables for simple single-agent testing.
 
 The two SDKs emit separate `copilotkit` and `langgraph` workflow streams for one chat turn. This demo does not force them into one multi-agent session because the LangGraph agent is the backend implementation of the same assistant, not an explicit delegated subagent.
 

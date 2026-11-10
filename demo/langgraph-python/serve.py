@@ -94,6 +94,8 @@ def create_served_graph(graph: Any) -> Any:
         or os.getenv("OPENBOX_AGENT_DID"),
         agent_private_key=os.getenv("OPENBOX_LANGGRAPH_AGENT_PRIVATE_KEY")
         or os.getenv("OPENBOX_AGENT_PRIVATE_KEY"),
+        workload_private_key=os.getenv("OPENBOX_LANGGRAPH_WORKLOAD_PRIVATE_KEY")
+        or os.getenv("OPENBOX_WORKLOAD_PRIVATE_KEY"),
         agent_name="langgraph-python-demo",
         task_queue="langgraph",
         validate=env_flag("OPENBOX_LANGGRAPH_VALIDATE", True),

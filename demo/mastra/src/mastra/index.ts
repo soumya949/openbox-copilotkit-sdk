@@ -13,6 +13,9 @@ const OPENBOX_MASTRA_AGENT_DID =
 const OPENBOX_MASTRA_AGENT_PRIVATE_KEY =
   process.env.OPENBOX_MASTRA_AGENT_PRIVATE_KEY ??
   process.env.OPENBOX_AGENT_PRIVATE_KEY;
+const OPENBOX_MASTRA_WORKLOAD_PRIVATE_KEY =
+  process.env.OPENBOX_MASTRA_WORKLOAD_PRIVATE_KEY ??
+  process.env.OPENBOX_WORKLOAD_PRIVATE_KEY;
 const OPENBOX_MASTRA_MULTI_AGENT_ENABLED =
   process.env.OPENBOX_MASTRA_MULTI_AGENT_ENABLED !== "false";
 const OPENBOX_MASTRA_MULTI_AGENT_SESSION_ID =
@@ -44,6 +47,7 @@ export const mastra =
         apiUrl: OPENBOX_URL,
         agentDid: OPENBOX_MASTRA_AGENT_DID,
         agentPrivateKey: OPENBOX_MASTRA_AGENT_PRIVATE_KEY,
+        workloadPrivateKey: OPENBOX_MASTRA_WORKLOAD_PRIVATE_KEY,
         multiAgent: openBoxMastraMultiAgent,
       })
     : baseMastra;

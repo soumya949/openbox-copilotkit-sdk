@@ -31,14 +31,12 @@ Then fill in `OPENAI_API_KEY`. You can use any model/provider supported by Mastr
 Fill these values in `.env`:
 
 - `OPENBOX_URL`
-- `OPENBOX_COPILOTKIT_API_KEY`
-- `OPENBOX_COPILOTKIT_AGENT_DID`
-- `OPENBOX_COPILOTKIT_AGENT_PRIVATE_KEY`
-- `OPENBOX_MASTRA_API_KEY`
-- `OPENBOX_MASTRA_AGENT_DID`
-- `OPENBOX_MASTRA_AGENT_PRIVATE_KEY`
+- `OPENBOX_COPILOTKIT_API_KEY` and `OPENBOX_COPILOTKIT_WORKLOAD_PRIVATE_KEY`
+- `OPENBOX_MASTRA_API_KEY` and `OPENBOX_MASTRA_WORKLOAD_PRIVATE_KEY`
 
-The OpenBox wrappers are opt-in: without OpenBox keys and `OPENBOX_URL`, the example runs as the standard CopilotKit + Mastra starter. For simple single-agent testing, the SDKs also fall back to `OPENBOX_API_KEY`, `OPENBOX_AGENT_DID`, and `OPENBOX_AGENT_PRIVATE_KEY`; for multi-agent testing, use the distinct CopilotKit and Mastra variables above.
+Each workload private key is the PEM shown when you create the agent (IAM v3 workload identity); keep it inside double quotes in `.env`. Agents registered with a DID use `OPENBOX_COPILOTKIT_AGENT_DID` / `OPENBOX_COPILOTKIT_AGENT_PRIVATE_KEY` and `OPENBOX_MASTRA_AGENT_DID` / `OPENBOX_MASTRA_AGENT_PRIVATE_KEY` instead. The parent/child handoff timeline identifies agents by DID, so it is only enabled when both agents have one; with workload identity the CopilotKit runtime and the Mastra agent are governed as two separate agents.
+
+The OpenBox wrappers are opt-in: without OpenBox keys and `OPENBOX_URL`, the example runs as the standard CopilotKit + Mastra starter. For simple single-agent testing, the SDKs also fall back to `OPENBOX_API_KEY` and `OPENBOX_WORKLOAD_PRIVATE_KEY` (or `OPENBOX_AGENT_DID` and `OPENBOX_AGENT_PRIVATE_KEY`); for multi-agent testing, use the distinct CopilotKit and Mastra variables above.
 
 3. Install dependencies using your preferred package manager:
 
