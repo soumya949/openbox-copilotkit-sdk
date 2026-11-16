@@ -17,5 +17,5 @@ dependencies = [
   "ag-ui-protocol==0.1.18",
   "pip>=26.0.1",
   "langchain-anthropic==1.4.1",
-  "openbox-langgraph-sdk-python>=1.0.0",
+  "openbox-langgraph-sdk-python>=1.2.0",
 ]

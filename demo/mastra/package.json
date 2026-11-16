@@ -23,7 +23,7 @@
     "@mastra/libsql": "1.1.0-alpha.2",
     "@mastra/memory": "1.0.1-alpha.1",
     "@openbox-ai/openbox-copilotkit": "file:../..",
-    "@openbox-ai/openbox-mastra-sdk": "1.0.0",
+    "@openbox-ai/openbox-mastra-sdk": "1.1.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "hono": "^4",

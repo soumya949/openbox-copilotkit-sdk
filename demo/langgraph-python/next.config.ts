@@ -1,9 +1,11 @@
 import type { NextConfig } from "next";
+import path from "node:path";
 
 const nextConfig: NextConfig = {
   output: "standalone",
   turbopack: {
-    root: process.cwd(),
+    // The repository root, so Turbopack can resolve the SDK linked from `file:../..`.
+    root: path.resolve(process.cwd(), "../.."),
   },
   serverExternalPackages: [
     "@copilotkit/runtime",

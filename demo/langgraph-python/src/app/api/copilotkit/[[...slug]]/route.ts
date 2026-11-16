@@ -74,6 +74,9 @@ async function createRuntime(
     agentPrivateKey:
       process.env.OPENBOX_COPILOTKIT_AGENT_PRIVATE_KEY ??
       process.env.OPENBOX_AGENT_PRIVATE_KEY,
+    workloadPrivateKey:
+      process.env.OPENBOX_COPILOTKIT_WORKLOAD_PRIVATE_KEY ??
+      process.env.OPENBOX_WORKLOAD_PRIVATE_KEY,
     middlewareOptions: {
       // The Python LangGraph SDK is authoritative for backend enforcement.
       enforceApprovals: false,

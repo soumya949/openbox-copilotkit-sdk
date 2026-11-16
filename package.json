@@ -1,6 +1,6 @@
 {
   "name": "@openbox-ai/openbox-copilotkit",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "OpenBox server-only governance and observability SDK for CopilotKit runtime v2",
   "license": "MIT",
   "author": "OpenBox Team",

@@ -17,6 +17,9 @@ const OPENBOX_COPILOTKIT_AGENT_DID =
 const OPENBOX_COPILOTKIT_AGENT_PRIVATE_KEY =
   process.env.OPENBOX_COPILOTKIT_AGENT_PRIVATE_KEY ??
   process.env.OPENBOX_AGENT_PRIVATE_KEY;
+const OPENBOX_COPILOTKIT_WORKLOAD_PRIVATE_KEY =
+  process.env.OPENBOX_COPILOTKIT_WORKLOAD_PRIVATE_KEY ??
+  process.env.OPENBOX_WORKLOAD_PRIVATE_KEY;
 const OPENBOX_MASTRA_API_KEY = process.env.OPENBOX_MASTRA_API_KEY;
 const OPENBOX_MASTRA_AGENT_DID = process.env.OPENBOX_MASTRA_AGENT_DID;
 const OPENBOX_MASTRA_AGENT_PRIVATE_KEY =
@@ -57,6 +60,7 @@ async function createRuntime(
     apiUrl: OPENBOX_URL,
     agentDid: OPENBOX_COPILOTKIT_AGENT_DID,
     agentPrivateKey: OPENBOX_COPILOTKIT_AGENT_PRIVATE_KEY,
+    workloadPrivateKey: OPENBOX_COPILOTKIT_WORKLOAD_PRIVATE_KEY,
     middlewareOptions: {
       enforceApprovals: false,
       frontendToolNames: ["setThemeColor", "weatherTool", "go_to_moon"],
@@ -78,6 +82,9 @@ async function createRuntime(
   return runtime;
 }
 
+// Multi-agent handoff identifies the parent and child by their DIDs, so it is
+// only enabled for agents registered with a DID. Workload-identity agents run
+// as two separately governed agents.
 function getMultiAgentOptions() {
   if (
     !OPENBOX_COPILOTKIT_AGENT_DID ||

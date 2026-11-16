@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.0 — 2026-11-10
 
 Adopts `@openbox-ai/openbox-sdk-ts` 2.1.0 (v3 workload identity) and aligns the event sequence with the other OpenBox SDKs.
 
